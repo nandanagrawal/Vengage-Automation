@@ -1,0 +1,96 @@
+@import "tailwindcss";
+
+:root {
+  --bg-deep: #080B18;
+  --bg-card: #0F1225;
+  --bg-card-hover: #141830;
+  --border-subtle: rgba(255, 255, 255, 0.07);
+  --border-hover: rgba(99, 102, 241, 0.4);
+}
+
+body {
+  background: var(--bg-deep);
+  font-family: var(--font-geist-sans), system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── Animations ── */
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateY(24px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes fadeInLeft {
+  from { opacity: 0; transform: translateX(-16px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes scaleIn {
+  from { opacity: 0; transform: scale(0.92); }
+  to   { opacity: 1; transform: scale(1); }
+}
+
+@keyframes pulseDot {
+  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(251, 113, 133, 0.5); }
+  50%       { opacity: 0.6; box-shadow: 0 0 0 6px rgba(251, 113, 133, 0); }
+}
+
+@keyframes shimmerSlide {
+  0%   { background-position: -200% center; }
+  100% { background-position: 200% center; }
+}
+
+@keyframes float {
+  0%, 100% { transform: translateY(0px); }
+  50%       { transform: translateY(-6px); }
+}
+
+@keyframes spin-slow {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+/* ── Utility classes ── */
+.animate-fadeInUp    { animation: fadeInUp  0.6s ease both; }
+.animate-fadeInLeft  { animation: fadeInLeft 0.5s ease both; }
+.animate-scaleIn     { animation: scaleIn   0.5s ease both; }
+.animate-float       { animation: float     3s ease-in-out infinite; }
+.animate-spin-slow   { animation: spin-slow 8s linear infinite; }
+
+.delay-100 { animation-delay: 0.10s; }
+.delay-150 { animation-delay: 0.15s; }
+.delay-200 { animation-delay: 0.20s; }
+.delay-250 { animation-delay: 0.25s; }
+.delay-300 { animation-delay: 0.30s; }
+.delay-350 { animation-delay: 0.35s; }
+.delay-400 { animation-delay: 0.40s; }
+.delay-500 { animation-delay: 0.50s; }
+.delay-600 { animation-delay: 0.60s; }
+
+.shimmer-btn {
+  background: linear-gradient(
+    90deg,
+    #6366f1 0%,
+    #818cf8 40%,
+    #a5b4fc 50%,
+    #818cf8 60%,
+    #6366f1 100%
+  );
+  background-size: 200% auto;
+  animation: shimmerSlide 3s linear infinite;
+}
+
+.pulse-dot {
+  animation: pulseDot 2s ease-in-out infinite;
+}
+
+.card-glow:hover {
+  box-shadow: 0 0 0 1px rgba(99, 102, 241, 0.3),
+              0 8px 32px rgba(99, 102, 241, 0.12),
+              0 2px 8px rgba(0, 0, 0, 0.4);
+}
+
+.dot-grid {
+  background-image: radial-gradient(circle, rgba(255,255,255,0.04) 1px, transparent 1px);
+  background-size: 28px 28px;
+}

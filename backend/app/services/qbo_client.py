@@ -1,0 +1,370 @@
+"""QuickBooks Online REST client — sync HTTP calls; mock/replace in tests via dependency overrides."""
+
+from __future__ import annotations
+
+import os
+from datetime import date, datetime, timedelta, timezone
+from typing import Any, Protocol
+from urllib.parse import quote
+
+import httpx
+
+from app.core.config import settings
+
+
+class SupportsQuickBooks(Protocol):
+    """Protocol for DI / mocking."""
+
+    def base_url(self) -> str: ...
+
+    def query_customers(self, access_token: str, realm_id: str) -> list[dict[str, Any]]: ...
+
+    def get_customer(self, access_token: str, realm_id: str, customer_id: str) -> dict[str, Any]: ...
+
+    def create_customer(self, access_token: str, realm_id: str, payload: dict[str, Any]) -> dict[str, Any]: ...
+
+    def update_customer(
+        self,
+        access_token: str,
+        realm_id: str,
+        customer_id: str,
+        payload: dict[str, Any],
+        sync_token: str | None,
+    ) -> dict[str, Any]: ...
+
+    def query_invoice_email_rows(
+        self,
+        access_token: str,
+        realm_id: str,
+        since: date,
+    ) -> list[dict[str, Any]]: ...
+
+    def upload_attachment(
+        self,
+        access_token: str,
+        realm_id: str,
+        customer_id: str,
+        filename: str,
+        content_type: str,
+        file_bytes: bytes,
+    ) -> dict[str, Any]: ...
+
+
+def _headers(access_token: str) -> dict[str, str]:
+    return {
+        "Authorization": f"Bearer {access_token}",
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+    }
+
+
+class QuickBooksClient:
+    def base_url(self) -> str:
+        if settings.QBO_ENVIRONMENT == "sandbox":
+            return "https://sandbox-quickbooks.api.intuit.com"
+        return "https://quickbooks.api.intuit.com"
+
+    def _minor(self) -> str:
+        return settings.QBO_MINOR_VERSION
+
+    def query_customers(self, access_token: str, realm_id: str) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        start = 1
+        page_size = 100
+        with httpx.Client(timeout=60.0) as client:
+            while True:
+                q = quote(f"SELECT * FROM Customer STARTPOSITION {start} MAXRESULTS {page_size}")
+                url = f"{self.base_url()}/v3/company/{realm_id}/query?query={q}&minorversion={self._minor()}"
+                res = client.get(url, headers=_headers(access_token))
+                res.raise_for_status()
+                data = res.json()
+                batch = data.get("QueryResponse", {}).get("Customer", []) or []
+                if isinstance(batch, dict):
+                    batch = [batch]
+                if not batch:
+                    break
+                out.extend(batch)
+                if len(batch) < page_size:
+                    break
+                start += page_size
+        return out
+
+    def get_customer(self, access_token: str, realm_id: str, customer_id: str) -> dict[str, Any]:
+        with httpx.Client(timeout=60.0) as client:
+            url = f"{self.base_url()}/v3/company/{realm_id}/customer/{customer_id}?minorversion={self._minor()}"
+            res = client.get(url, headers=_headers(access_token))
+            res.raise_for_status()
+            return res.json().get("Customer", {})
+
+    def create_customer(self, access_token: str, realm_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        with httpx.Client(timeout=60.0) as client:
+            url = f"{self.base_url()}/v3/company/{realm_id}/customer?minorversion={self._minor()}"
+            res = client.post(url, headers=_headers(access_token), json=payload)
+            if not res.is_success:
+                raise httpx.HTTPStatusError(
+                    f"{res.status_code} from QBO create_customer: {res.text}",
+                    request=res.request,
+                    response=res,
+                )
+            return res.json().get("Customer", {})
+
+    def update_customer(
+        self,
+        access_token: str,
+        realm_id: str,
+        customer_id: str,
+        payload: dict[str, Any],
+        sync_token: str | None,
+    ) -> dict[str, Any]:
+        body = {**payload, "Id": customer_id}
+        if sync_token:
+            body["SyncToken"] = sync_token
+        sparse = os.getenv("QBO_CUSTOMER_SPARSE", "true").lower() in ("1", "true", "yes")
+        url = f"{self.base_url()}/v3/company/{realm_id}/customer?minorversion={self._minor()}"
+        if sparse:
+            url += "&sparse=true"
+        with httpx.Client(timeout=60.0) as client:
+            res = client.post(url, headers=_headers(access_token), json=body)
+            if not res.is_success:
+                raise httpx.HTTPStatusError(
+                    f"{res.status_code} from QBO update_customer({customer_id}): {res.text}",
+                    request=res.request,
+                    response=res,
+                )
+            return res.json().get("Customer", {})
+
+    def query_invoice_email_rows(
+        self,
+        access_token: str,
+        realm_id: str,
+        since: date,
+    ) -> list[dict[str, Any]]:
+        since_str = since.isoformat()
+        q = quote(
+            "SELECT Id, DocNumber, CustomerRef, EmailStatus, TxnDate FROM Invoice "
+            f"WHERE TxnDate >= '{since_str}' MAXRESULTS 1000"
+        )
+        url = f"{self.base_url()}/v3/company/{realm_id}/query?query={q}&minorversion={self._minor()}"
+        with httpx.Client(timeout=60.0) as client:
+            res = client.get(url, headers=_headers(access_token))
+            res.raise_for_status()
+            data = res.json()
+            rows = data.get("QueryResponse", {}).get("Invoice", []) or []
+            if isinstance(rows, dict):
+                rows = [rows]
+            return rows
+
+    def upload_attachment(
+        self,
+        access_token: str,
+        realm_id: str,
+        customer_id: str,
+        filename: str,
+        content_type: str,
+        file_bytes: bytes,
+    ) -> dict[str, Any]:
+        import json as _json
+        metadata = _json.dumps({
+            "AttachableRef": [{"EntityRef": {"type": "Customer", "value": customer_id}}],
+            "ContentType": content_type,
+            "FileName": filename,
+        })
+        url = f"{self.base_url()}/v3/company/{realm_id}/upload"
+        with httpx.Client(timeout=120.0) as client:
+            res = client.post(
+                url,
+                headers={"Authorization": f"Bearer {access_token}", "Accept": "application/json"},
+                files={
+                    "file_metadata_01": ("attachment.json", metadata.encode(), "application/json"),
+                    "file_content_01": (filename, file_bytes, content_type),
+                },
+            )
+            if not res.is_success:
+                raise httpx.HTTPStatusError(
+                    f"{res.status_code} from QBO upload: {res.text}",
+                    request=res.request,
+                    response=res,
+                )
+            return res.json()
+
+
+def phone_block(number: str | None) -> dict[str, str] | None:
+    if not number:
+        return None
+    return {"FreeFormNumber": number}
+
+
+def build_qbo_addr(
+    line1: str | None = None,
+    line2: str | None = None,
+    line3: str | None = None,
+    line4: str | None = None,
+    city: str | None = None,
+    state: str | None = None,
+    zip_code: str | None = None,
+    country: str | None = None,
+) -> dict[str, Any]:
+    block: dict[str, Any] = {}
+    if line1:
+        block["Line1"] = line1[:500]
+    if line2:
+        block["Line2"] = line2[:500]
+    if line3:
+        block["Line3"] = line3[:500]
+    if line4:
+        block["Line4"] = line4[:500]
+    if city:
+        block["City"] = city[:255]
+    if country:
+        block["Country"] = country[:255]
+    if state:
+        block["CountrySubDivisionCode"] = state[:255]
+    if zip_code:
+        block["PostalCode"] = zip_code[:31]
+    return block
+
+
+def customer_model_to_qbo_payload(row: Any) -> dict[str, Any]:
+    payload: dict[str, Any] = {"DisplayName": row.display_name}
+    if row.title:
+        payload["Title"] = row.title
+    if row.given_name:
+        payload["GivenName"] = row.given_name
+    if row.middle_name:
+        payload["MiddleName"] = row.middle_name
+    if row.family_name:
+        payload["FamilyName"] = row.family_name
+    if row.suffix:
+        payload["Suffix"] = row.suffix
+    if row.company_name:
+        payload["CompanyName"] = row.company_name
+    if row.primary_email:
+        payload["PrimaryEmailAddr"] = {"Address": row.primary_email}
+    if row.phone_number:
+        payload["PrimaryPhone"] = phone_block(row.phone_number)
+    if row.mobile:
+        payload["Mobile"] = phone_block(row.mobile)
+    if row.fax:
+        payload["Fax"] = phone_block(row.fax)
+    if row.website:
+        payload["WebAddr"] = {"URI": row.website[:500]}
+    if row.print_on_check_name:
+        payload["PrintOnCheckName"] = row.print_on_check_name[:500]
+    if row.notes:
+        payload["Notes"] = row.notes[:4000]
+
+    ba = build_qbo_addr(
+        line1=row.billing_line1,
+        line2=row.billing_line2,
+        line3=row.billing_line3,
+        line4=row.billing_line4,
+        city=row.billing_city,
+        state=row.billing_state,
+        zip_code=row.billing_zip,
+        country=row.billing_country,
+    )
+    if ba:
+        payload["BillAddr"] = ba
+
+    if row.ship_same_as_billing and payload.get("BillAddr"):
+        payload["ShipAddr"] = dict(payload["BillAddr"])
+    elif not row.ship_same_as_billing:
+        sa = build_qbo_addr(
+            line1=row.shipping_line1,
+            line2=row.shipping_line2,
+            line3=row.shipping_line3,
+            line4=row.shipping_line4,
+            city=row.shipping_city,
+            state=row.shipping_state,
+            zip_code=row.shipping_zip,
+            country=row.shipping_country,
+        )
+        if sa:
+            payload["ShipAddr"] = sa
+
+    return payload
+
+
+def datetime_from_qbo(value: str) -> datetime:
+    if value.endswith("Z"):
+        value = value[:-1] + "+00:00"
+    return datetime.fromisoformat(value)
+
+
+def qbo_time(qbo: dict[str, Any]) -> datetime | None:
+    meta = qbo.get("MetaData") or {}
+    lu = meta.get("LastUpdatedTime")
+    if not lu:
+        return None
+    try:
+        return datetime_from_qbo(lu)
+    except ValueError:
+        return None
+
+
+def apply_qbo_customer_to_model(row: Any, qbo: dict[str, Any]) -> None:
+    qt = qbo_time(qbo)
+    if qt:
+        row.qbo_last_updated = qt
+
+    row.qbo_id = str(qbo.get("Id", row.qbo_id or ""))
+    row.display_name = qbo.get("DisplayName") or row.display_name
+    row.title = qbo.get("Title")
+    row.given_name = qbo.get("GivenName")
+    row.middle_name = qbo.get("MiddleName")
+    row.family_name = qbo.get("FamilyName")
+    row.suffix = qbo.get("Suffix")
+    row.company_name = qbo.get("CompanyName")
+
+    pe = qbo.get("PrimaryEmailAddr") or {}
+    row.primary_email = pe.get("Address")
+
+    row.phone_number = _read_phone(qbo.get("PrimaryPhone"))
+    row.mobile = _read_phone(qbo.get("Mobile"))
+    row.fax = _read_phone(qbo.get("Fax"))
+
+    web = qbo.get("WebAddr") or {}
+    row.website = web.get("URI")
+
+    row.print_on_check_name = qbo.get("PrintOnCheckName")
+    row.notes = qbo.get("Notes")
+
+    ba = qbo.get("BillAddr") or {}
+    row.billing_line1 = ba.get("Line1")
+    row.billing_line2 = ba.get("Line2")
+    row.billing_line3 = ba.get("Line3")
+    row.billing_line4 = ba.get("Line4")
+    row.billing_city = ba.get("City")
+    row.billing_country = ba.get("Country")
+    row.billing_state = ba.get("CountrySubDivisionCode")
+    row.billing_zip = ba.get("PostalCode")
+
+    sa = qbo.get("ShipAddr") or {}
+    if sa:
+        row.ship_same_as_billing = False
+        row.shipping_line1 = sa.get("Line1")
+        row.shipping_line2 = sa.get("Line2")
+        row.shipping_line3 = sa.get("Line3")
+        row.shipping_line4 = sa.get("Line4")
+        row.shipping_city = sa.get("City")
+        row.shipping_country = sa.get("Country")
+        row.shipping_state = sa.get("CountrySubDivisionCode")
+        row.shipping_zip = sa.get("PostalCode")
+
+
+def _read_phone(block: Any) -> str | None:
+    if not block:
+        return None
+    return block.get("FreeFormNumber")
+
+
+def effective_local_time(row: Any) -> datetime:
+    u = row.updated_at
+    if u.tzinfo is None:
+        u = u.replace(tzinfo=timezone.utc)
+    q = row.qbo_last_updated
+    if q is None:
+        return u
+    if q.tzinfo is None:
+        q = q.replace(tzinfo=timezone.utc)
+    return max(u, q)

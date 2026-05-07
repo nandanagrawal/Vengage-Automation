@@ -209,3 +209,118 @@ def test_add_attachment_in_mail_true_persisted(admin_client):
     })
     assert r.status_code == 200
     assert r.json()["add_attachment_in_mail"] is True
+
+
+# ── Customer file attachments (local + QBO) ───────────────────────────────────
+
+def test_upload_attachment_persists_lists_and_downloads(admin_client, fake_qbo):
+    cid = admin_client.post("/api/v1/customers", json=_BASE).json()["id"]
+    files = [("files", ("doc.pdf", b"%PDF-1.4 hello", "application/pdf"))]
+    up = admin_client.post(f"/api/v1/customers/{cid}/attachments", files=files)
+    assert up.status_code == 200, up.text
+    data = up.json()
+    assert len(data["attachments"]) == 1
+    assert data["attachments"][0]["original_filename"] == "doc.pdf"
+    assert data["attachments"][0]["qbo_attachable_id"] == "att-1"
+    assert data["errors"] == []
+
+    lst = admin_client.get(f"/api/v1/customers/{cid}/attachments")
+    assert lst.status_code == 200
+    assert len(lst.json()) == 1
+    aid = lst.json()[0]["id"]
+
+    dl = admin_client.get(f"/api/v1/customers/{cid}/attachments/{aid}/file")
+    assert dl.status_code == 200
+    assert dl.content == b"%PDF-1.4 hello"
+
+
+def test_supervisor_can_upload_own_customer_attachment(supervisor_client, admin_client, fake_qbo):
+    cid = supervisor_client.post("/api/v1/customers", json=_BASE).json()["id"]
+    admin_client.post(f"/api/v1/customers/{cid}/approve", json={"action": "approve"})
+    files = [("files", ("a.txt", b"hi", "text/plain"))]
+    r = supervisor_client.post(f"/api/v1/customers/{cid}/attachments", files=files)
+    assert r.status_code == 200
+    assert len(r.json()["attachments"]) == 1
+
+
+def test_supervisor_cannot_access_others_customer_attachments(admin_client, supervisor_client, fake_qbo):
+    cid = admin_client.post("/api/v1/customers", json={**_BASE, "display_name": "Admin Only Co"}).json()["id"]
+    assert supervisor_client.get(f"/api/v1/customers/{cid}/attachments").status_code == 403
+
+
+def test_sync_prunes_local_attachments_when_removed_from_quickbooks(admin_client, fake_qbo):
+    cid = admin_client.post("/api/v1/customers", json=_BASE).json()["id"]
+    qbo_id = admin_client.get(f"/api/v1/customers/{cid}").json()["qbo_id"]
+    assert qbo_id
+    files = [("files", ("gone.pdf", b"x", "application/pdf"))]
+    assert admin_client.post(f"/api/v1/customers/{cid}/attachments", files=files).status_code == 200
+    assert len(admin_client.get(f"/api/v1/customers/{cid}/attachments").json()) == 1
+
+    # Simulate user deleting the attachment in QuickBooks only
+    fake_qbo.attachables_by_customer[str(qbo_id)] = []
+
+    body = admin_client.post("/api/v1/sync/quickbooks").json()
+    assert body.get("attachments_pruned") == 1
+    assert admin_client.get(f"/api/v1/customers/{cid}/attachments").json() == []
+
+
+def test_sync_upserts_and_prunes_qbo_items(admin_client, fake_qbo):
+    fake_qbo.items = [
+        {"Id": "1", "Name": "Alpha", "Type": "Service", "Active": True, "SyncToken": "0"},
+        {"Id": "2", "Name": "Beta", "Type": "Service", "Active": True, "SyncToken": "0"},
+    ]
+    r1 = admin_client.post("/api/v1/sync/quickbooks")
+    assert r1.status_code == 200
+    b1 = r1.json()
+    assert b1["items_upserted"] == 2
+    assert b1["items_removed_local"] == 0
+
+    products = admin_client.get("/api/v1/product-and-services").json()
+    assert len(products) == 2
+    names = {p["name"] for p in products}
+    assert names == {"Alpha", "Beta"}
+
+    fake_qbo.items = [
+        {"Id": "1", "Name": "Alpha Renamed", "Type": "Service", "Active": True, "SyncToken": "1"},
+    ]
+    r2 = admin_client.post("/api/v1/sync/quickbooks")
+    assert r2.status_code == 200
+    b2 = r2.json()
+    assert b2["items_upserted"] == 1
+    assert b2["items_removed_local"] == 1
+
+    products2 = admin_client.get("/api/v1/product-and-services").json()
+    assert len(products2) == 1
+    assert products2[0]["name"] == "Alpha Renamed"
+
+
+def test_customer_create_with_product_links(admin_client, fake_qbo):
+    fake_qbo.items = [{"Id": "10", "Name": "Widget", "Type": "Service", "Active": True, "SyncToken": "0"}]
+    admin_client.post("/api/v1/sync/quickbooks")
+    pid = admin_client.get("/api/v1/product-and-services").json()[0]["id"]
+
+    r = admin_client.post(
+        "/api/v1/customers",
+        json={**_BASE, "display_name": "Linked Co", "product_and_service_ids": [pid]},
+    )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["product_and_service_ids"] == [pid]
+
+
+def test_customer_invalid_product_ids_rejected(admin_client):
+    r = admin_client.post(
+        "/api/v1/customers",
+        json={**_BASE, "display_name": "Bad Co", "product_and_service_ids": [99999]},
+    )
+    assert r.status_code == 422
+
+
+def test_qbo_customer_payload_excludes_app_product_links():
+    from app.models.customer import Customer
+    from app.services.qbo_client import customer_model_to_qbo_payload
+
+    row = Customer(display_name="X Co", rate=0, add_attachment_in_mail=False)
+    payload = customer_model_to_qbo_payload(row)
+    assert "product_and_service" not in payload
+    assert "Item" not in payload

@@ -2,7 +2,18 @@
 
 import type { FormEvent, ReactNode } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { CustomerRow } from "@/lib/api";
+import type { CenterRow, CustomerAttachmentRow, CustomerRow, ProductAndServiceRow } from "@/lib/api";
+import { apiDelete, apiDownloadBlob, apiGet, apiPatch, apiPost, downloadBlobAsFile } from "@/lib/api";
+
+type CenterLine = { key: string; id?: number; name: string };
+
+function newCenterLine(): CenterLine {
+  const key =
+    typeof crypto !== "undefined" && "randomUUID" in crypto
+      ? crypto.randomUUID()
+      : `k-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  return { key, name: "" };
+}
 
 export type CustomerFormValues = {
   title: string;
@@ -139,29 +150,108 @@ export function CustomerModal({
 }: {
   open: boolean;
   onClose: () => void;
-  onSubmit: (payload: Record<string, unknown>, files: File[]) => Promise<void>;
+  onSubmit: (payload: Record<string, unknown>, files: File[]) => Promise<CustomerRow>;
   submitting: boolean;
   mode?: "create" | "edit";
   customer?: CustomerRow;
 }) {
   const [form, setForm] = useState<CustomerFormValues>(emptyForm);
   const [files, setFiles] = useState<File[]>([]);
+  const [existingAttachments, setExistingAttachments] = useState<CustomerAttachmentRow[]>([]);
+  const [attachmentsLoading, setAttachmentsLoading] = useState(false);
+  const [attachmentsLoadError, setAttachmentsLoadError] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const [openName, setOpenName] = useState(true);
   const [openAddr, setOpenAddr] = useState(true);
   const [openNotes, setOpenNotes] = useState(true);
   const [openExtra, setOpenExtra] = useState(true);
+  const [openCenters, setOpenCenters] = useState(true);
+  const [centerLines, setCenterLines] = useState<CenterLine[]>([]);
+  const [pendingDeleteIds, setPendingDeleteIds] = useState<number[]>([]);
+  const [centersLoadError, setCentersLoadError] = useState<string | null>(null);
+  const [productOptions, setProductOptions] = useState<ProductAndServiceRow[]>([]);
+  const [productsLoadError, setProductsLoadError] = useState<string | null>(null);
+  const [selectedProductIds, setSelectedProductIds] = useState<number[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!open) return;
     if (mode === "edit" && customer) {
       setForm(customerToForm(customer));
+      setSelectedProductIds(customer.product_and_service_ids ?? []);
     } else {
       setForm(emptyForm());
+      setSelectedProductIds([]);
     }
     setFiles([]);
+    setExistingAttachments([]);
+    setAttachmentsLoadError(null);
+    setCenterLines([]);
+    setPendingDeleteIds([]);
+    setCentersLoadError(null);
   }, [open, mode, customer]);
+
+  useEffect(() => {
+    if (!open || mode !== "edit" || !customer?.id) {
+      return;
+    }
+    let cancelled = false;
+    setCentersLoadError(null);
+    void apiGet<CenterRow[]>(`/customers/${customer.id}/centers`)
+      .then((rows) => {
+        if (!cancelled) {
+          setCenterLines(rows.map((r) => ({ key: `saved-${r.id}`, id: r.id, name: r.name })));
+          setPendingDeleteIds([]);
+        }
+      })
+      .catch((e) => {
+        if (!cancelled) setCentersLoadError(e instanceof Error ? e.message : "Failed to load centers");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, mode, customer?.id]);
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    setProductsLoadError(null);
+    void apiGet<ProductAndServiceRow[]>("/product-and-services")
+      .then((rows) => {
+        if (!cancelled) setProductOptions(rows);
+      })
+      .catch((e) => {
+        if (!cancelled) setProductsLoadError(e instanceof Error ? e.message : "Failed to load products");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (!open || mode !== "edit" || !customer?.id) {
+      setExistingAttachments([]);
+      setAttachmentsLoadError(null);
+      setAttachmentsLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setAttachmentsLoading(true);
+    setAttachmentsLoadError(null);
+    void apiGet<CustomerAttachmentRow[]>(`/customers/${customer.id}/attachments`)
+      .then((rows) => {
+        if (!cancelled) setExistingAttachments(rows);
+      })
+      .catch((e) => {
+        if (!cancelled) setAttachmentsLoadError(e instanceof Error ? e.message : "Failed to load attachments");
+      })
+      .finally(() => {
+        if (!cancelled) setAttachmentsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, mode, customer?.id]);
 
   const displayPreview = useMemo(() => {
     const parts = [form.title, form.given_name, form.middle_name, form.family_name, form.suffix].filter(Boolean);
@@ -180,9 +270,19 @@ export function CustomerModal({
 
   const removeFile = (idx: number) => setFiles((fs) => fs.filter((_, i) => i !== idx));
 
+  const removeCenterLine = (line: CenterLine) => {
+    if (line.id) setPendingDeleteIds((p) => [...p, line.id!]);
+    setCenterLines((rows) => rows.filter((r) => r.key !== line.key));
+  };
+
   const resetAndClose = () => {
     setForm(emptyForm());
     setFiles([]);
+    setExistingAttachments([]);
+    setAttachmentsLoadError(null);
+    setCenterLines([]);
+    setPendingDeleteIds([]);
+    setCentersLoadError(null);
     onClose();
   };
 
@@ -229,13 +329,32 @@ export function CustomerModal({
       notes: form.notes || undefined,
       rate: form.rate || "0",
       add_attachment_in_mail: form.add_attachment_in_mail,
+      product_and_service_ids: selectedProductIds,
     };
 
     try {
-      await onSubmit(payload, files);
+      const savedCustomer = await onSubmit(payload, files);
+      const cid = savedCustomer.id;
+      try {
+        for (const did of pendingDeleteIds) {
+          await apiDelete(`/customers/${cid}/centers/${did}`);
+        }
+        for (const line of centerLines) {
+          const n = line.name.trim();
+          if (!n) continue;
+          if (line.id) {
+            await apiPatch(`/customers/${cid}/centers/${line.id}`, { name: n });
+          } else {
+            await apiPost(`/customers/${cid}/centers`, { name: n });
+          }
+        }
+      } catch (e) {
+        setCentersLoadError(e instanceof Error ? e.message : "Failed to save centers");
+        return;
+      }
       resetAndClose();
     } catch {
-      /* parent surfaces error */
+      /* parent surfaces customer save error */
     }
   };
 
@@ -325,6 +444,49 @@ export function CustomerModal({
             </div>
           </Section>
 
+          <Section
+            title="Company centers"
+            open={openCenters}
+            onToggle={() => setOpenCenters(!openCenters)}
+            icon={<span className="text-sky-400">⌁</span>}
+          >
+            <p className="text-[11px] text-slate-600 mb-2">
+              Add one or more centers for this company. They are saved with the customer and can be combined on invoices.
+            </p>
+            {centersLoadError && <p className="text-xs text-rose-400 mb-2">{centersLoadError}</p>}
+            <div className="space-y-2">
+              {centerLines.map((line) => (
+                <div key={line.key} className="flex gap-2 items-center">
+                  <input
+                    className={fieldCls()}
+                    value={line.name}
+                    onChange={(e) =>
+                      setCenterLines((rows) =>
+                        rows.map((r) => (r.key === line.key ? { ...r, name: e.target.value } : r)),
+                      )
+                    }
+                    placeholder="Center name"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => removeCenterLine(line)}
+                    className="shrink-0 text-slate-500 hover:text-red-400 px-2 text-sm"
+                    aria-label="Remove center"
+                  >
+                    ✕
+                  </button>
+                </div>
+              ))}
+            </div>
+            <button
+              type="button"
+              className="mt-3 text-sm font-semibold text-indigo-400 hover:text-indigo-300"
+              onClick={() => setCenterLines((rows) => [...rows, newCenterLine()])}
+            >
+              Add Center
+            </button>
+          </Section>
+
           {/* ── Addresses ── */}
           <Section title="Addresses" open={openAddr} onToggle={() => setOpenAddr(!openAddr)} icon={<span className="text-emerald-400">📍</span>}>
             <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Billing address</p>
@@ -396,7 +558,60 @@ export function CustomerModal({
             <label className={labelCls()}>Notes</label>
             <textarea rows={3} className={`${fieldCls()} resize-y mb-4`} value={form.notes} onChange={(e) => update("notes", e.target.value)} />
 
-            <p className={labelCls()}>Upload files to QuickBooks</p>
+            {mode === "edit" && customer?.id && (
+              <div className="mb-4">
+                <p className={labelCls()}>Saved on this platform</p>
+                {attachmentsLoading && <p className="text-xs text-slate-600 py-2">Loading attachments…</p>}
+                {attachmentsLoadError && <p className="text-xs text-rose-400 py-1">{attachmentsLoadError}</p>}
+                {!attachmentsLoading && !attachmentsLoadError && (
+                  <p className="text-[11px] text-slate-600 mb-2">
+                    Deletions in QuickBooks are removed here after you run <span className="text-slate-400">Sync</span> on
+                    the customers page.
+                  </p>
+                )}
+                {!attachmentsLoading && !attachmentsLoadError && existingAttachments.length === 0 && (
+                  <p className="text-xs text-slate-600 py-1">
+                    No files stored yet. Upload below — we keep a copy here and send to QuickBooks.
+                  </p>
+                )}
+                {existingAttachments.length > 0 && (
+                  <ul className="mt-2 space-y-1.5">
+                    {existingAttachments.map((a) => (
+                      <li
+                        key={a.id}
+                        className="flex items-center justify-between gap-2 py-1.5 px-3 rounded-lg bg-white/[0.04] border border-white/[0.06]"
+                      >
+                        <div className="flex items-center gap-2 min-w-0">
+                          <FileIcon />
+                          <span className="text-sm text-slate-300 truncate">{a.original_filename}</span>
+                          <span className="text-xs text-slate-600 shrink-0">
+                            {a.size_bytes < 1024 ? `${a.size_bytes} B` : `${(a.size_bytes / 1024).toFixed(0)} KB`}
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          className="text-xs font-medium text-indigo-400 hover:text-indigo-300 shrink-0"
+                          onClick={async () => {
+                            try {
+                              const blob = await apiDownloadBlob(
+                                `/customers/${customer.id}/attachments/${a.id}/file`,
+                              );
+                              downloadBlobAsFile(blob, a.original_filename);
+                            } catch {
+                              /* ignore */
+                            }
+                          }}
+                        >
+                          Download
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
+
+            <p className={labelCls()}>Upload files (QuickBooks + local copy)</p>
             <div
               className={`rounded-xl border-2 border-dashed px-4 py-6 text-center cursor-pointer transition-colors ${dragOver ? "border-indigo-500/60 bg-indigo-500/5" : "border-white/[0.12] hover:border-indigo-500/40 hover:bg-white/[0.02]"}`}
               onClick={() => fileInputRef.current?.click()}
@@ -408,7 +623,7 @@ export function CustomerModal({
                 <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5" />
               </svg>
               <p className="text-sm text-slate-400">Drag & drop files here, or <span className="text-indigo-400 underline">browse</span></p>
-              <p className="text-xs text-slate-600 mt-1">PDFs, images, spreadsheets — saved to QuickBooks</p>
+              <p className="text-xs text-slate-600 mt-1">PDFs, images, spreadsheets — stored here and attached in QuickBooks</p>
               {mode === "create" && <p className="text-xs text-slate-700 mt-1">Files upload after customer is approved in QBO</p>}
               <input ref={fileInputRef} type="file" multiple className="hidden" onChange={(e) => { addFiles(Array.from(e.target.files ?? [])); e.target.value = ""; }} />
             </div>
@@ -431,6 +646,36 @@ export function CustomerModal({
 
           {/* ── App fields ── */}
           <Section title="App fields" open={openExtra} onToggle={() => setOpenExtra(!openExtra)} icon={<span className="text-violet-400">⚙</span>}>
+            <div className="mb-4">
+              <label className={labelCls()}>Products &amp; services (this app only)</label>
+              <p className="text-[11px] text-slate-600 mb-2">
+                Linked from QuickBooks Items after Sync. Not sent to QuickBooks on the customer record.
+              </p>
+              {productsLoadError && <p className="text-xs text-rose-400 mb-2">{productsLoadError}</p>}
+              {productOptions.length === 0 && !productsLoadError && (
+                <p className="text-xs text-slate-600 py-1">No items yet — run Sync to pull from QuickBooks.</p>
+              )}
+              {productOptions.length > 0 && (
+                <div className="max-h-40 overflow-y-auto rounded-lg border border-white/[0.08] bg-white/[0.02] px-3 py-2 space-y-1.5">
+                  {productOptions.map((p) => (
+                    <label key={p.id} className="flex items-center gap-2.5 cursor-pointer text-sm text-slate-300">
+                      <input
+                        type="checkbox"
+                        className="rounded border-white/20"
+                        checked={selectedProductIds.includes(p.id)}
+                        onChange={(e) => {
+                          setSelectedProductIds((prev) =>
+                            e.target.checked ? [...prev, p.id] : prev.filter((id) => id !== p.id),
+                          );
+                        }}
+                      />
+                      <span className="truncate">{p.name}</span>
+                      {p.sku ? <span className="text-xs text-slate-600 shrink-0">({p.sku})</span> : null}
+                    </label>
+                  ))}
+                </div>
+              )}
+            </div>
             <div className="grid md:grid-cols-2 gap-4 items-start">
               <div>
                 <label className={labelCls()}>Rate</label>

@@ -1,7 +1,8 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { apiDelete, apiGet, apiPatch, apiPost, apiUpload, type CustomerRow, type SyncResult } from "@/lib/api";
+import { apiDelete, apiGet, apiPatch, apiPost, apiUpload, type CustomerRow, type SyncResult, type UploadAttachmentsResult } from "@/lib/api";
 import { useAuth } from "@/lib/useAuth";
 import { CustomerModal } from "./CustomerModal";
 
@@ -27,7 +28,7 @@ function SortIcon({ active, dir }: { active: boolean; dir: SortDir }) {
 }
 
 // Col layout: Customer | Email | Rate | Attach | Status | Actions
-const COLS = "grid-cols-[minmax(0,2fr)_minmax(0,1.5fr)_6rem_4.5rem_8rem_10rem]";
+const COLS = "grid-cols-[minmax(0,2fr)_minmax(0,1.5fr)_6rem_4.5rem_8rem_12rem]";
 
 export default function CustomersPage() {
   const { user } = useAuth();
@@ -74,7 +75,7 @@ export default function CustomersPage() {
     setSyncMsg(null);
     try {
       const res = await apiPost<SyncResult>("/sync/quickbooks");
-      setSyncMsg(`Pulled ${res.customers_pulled} · Pushed ${res.customers_pushed} · Created in QBO ${res.customers_created_remote} · Email rows ${res.invoice_activity_rows}`);
+      setSyncMsg(`Pulled ${res.customers_pulled} · Pushed ${res.customers_pushed} · Created in QBO ${res.customers_created_remote} · Email rows ${res.invoice_activity_rows} · Attachments pruned ${res.attachments_pruned} · Items upserted ${res.items_upserted} · Items removed locally ${res.items_removed_local}`);
       await load();
     } catch (e) {
       setSyncMsg(e instanceof Error ? e.message : "Sync failed");
@@ -86,18 +87,22 @@ export default function CustomersPage() {
   const uploadFiles = async (customerId: number, files: File[]) => {
     if (!files.length) return;
     try {
-      await apiUpload(`/customers/${customerId}/attachments`, files);
-    } catch {
-      // non-critical — customer was saved, just show nothing
+      const res = await apiUpload<UploadAttachmentsResult>(`/customers/${customerId}/attachments`, files);
+      if (res.errors.length) {
+        setLoadError(`Some uploads failed: ${res.errors.join("; ")}`);
+      }
+    } catch (e) {
+      setLoadError(e instanceof Error ? e.message : "Attachment upload failed");
     }
   };
 
-  const onCreate = async (payload: Record<string, unknown>, files: File[]) => {
+  const onCreate = async (payload: Record<string, unknown>, files: File[]): Promise<CustomerRow> => {
     setSaving(true);
     try {
       const created = await apiPost<CustomerRow>("/customers", payload);
       if (files.length && created.qbo_id) await uploadFiles(created.id, files);
       await load();
+      return created;
     } catch (e) {
       setLoadError(e instanceof Error ? e.message : "Save failed");
       throw e;
@@ -106,13 +111,14 @@ export default function CustomersPage() {
     }
   };
 
-  const onEdit = async (payload: Record<string, unknown>, files: File[]) => {
-    if (!editCustomer) return;
+  const onEdit = async (payload: Record<string, unknown>, files: File[]): Promise<CustomerRow> => {
+    if (!editCustomer) throw new Error("No customer selected");
     setSaving(true);
     try {
       const updated = await apiPatch<CustomerRow>(`/customers/${editCustomer.id}`, payload);
       if (files.length) await uploadFiles(updated.id, files);
       await load();
+      return updated;
     } catch (e) {
       setLoadError(e instanceof Error ? e.message : "Update failed");
       throw e;
@@ -192,7 +198,7 @@ export default function CustomersPage() {
       <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 mb-6 animate-fadeInUp">
         <div>
           <h1 className="text-2xl font-bold text-white tracking-tight">Customers</h1>
-          <p className="text-slate-500 text-sm mt-1">Two-way sync with QuickBooks · Supervisors create, admins approve and push to QBO</p>
+          <p className="text-slate-500 text-sm mt-1">Two-way sync with QuickBooks · Supervisors create, admins approve and push to QBO · Use the grid icon to manage invoice groupings per customer.</p>
           {isAdmin && pendingCount > 0 && (
             <p className="text-amber-400 text-xs mt-1.5 flex items-center gap-1.5">
               <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
@@ -318,7 +324,16 @@ export default function CustomersPage() {
                 </div>
 
                 {/* Actions */}
-                <div className="flex items-center justify-center gap-1">
+                <div className="flex items-center justify-center gap-0.5 flex-wrap">
+                  <Link
+                    href={`/invoices?company=${c.id}`}
+                    title="Invoice groupings for this customer"
+                    className="p-1.5 rounded-lg text-slate-500 hover:text-sky-400 hover:bg-sky-500/10 transition-colors"
+                  >
+                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+                    </svg>
+                  </Link>
                   {/* Edit */}
                   <button
                     title="Edit customer"

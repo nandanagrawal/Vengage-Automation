@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
 from typing import Any, Protocol
 from urllib.parse import quote
 
@@ -48,6 +49,15 @@ class SupportsQuickBooks(Protocol):
         content_type: str,
         file_bytes: bytes,
     ) -> dict[str, Any]: ...
+
+    def query_attachables_for_customer(
+        self,
+        access_token: str,
+        realm_id: str,
+        customer_qbo_id: str,
+    ) -> list[dict[str, Any]]: ...
+
+    def query_items(self, access_token: str, realm_id: str) -> list[dict[str, Any]]: ...
 
 
 def _headers(access_token: str) -> dict[str, str]:
@@ -187,6 +197,62 @@ class QuickBooksClient:
                 )
             return res.json()
 
+    def query_attachables_for_customer(
+        self,
+        access_token: str,
+        realm_id: str,
+        customer_qbo_id: str,
+    ) -> list[dict[str, Any]]:
+        """Return Attachable entities still linked to this QBO Customer (for sync reconciliation)."""
+        cid = str(customer_qbo_id).replace("'", "''")
+        base_sql = (
+            f"SELECT * FROM Attachable WHERE AttachableRef.EntityRef.value = '{cid}' "
+            "AND AttachableRef.EntityRef.type = 'Customer'"
+        )
+        out: list[dict[str, Any]] = []
+        start = 1
+        page_size = 100
+        with httpx.Client(timeout=60.0) as client:
+            while True:
+                q = quote(f"{base_sql} STARTPOSITION {start} MAXRESULTS {page_size}")
+                url = f"{self.base_url()}/v3/company/{realm_id}/query?query={q}&minorversion={self._minor()}"
+                res = client.get(url, headers=_headers(access_token))
+                res.raise_for_status()
+                data = res.json()
+                batch = data.get("QueryResponse", {}).get("Attachable", []) or []
+                if isinstance(batch, dict):
+                    batch = [batch]
+                if not batch:
+                    break
+                out.extend(batch)
+                if len(batch) < page_size:
+                    break
+                start += page_size
+        return out
+
+    def query_items(self, access_token: str, realm_id: str) -> list[dict[str, Any]]:
+        """Paginated Item query — full catalog (no Active/Type filter)."""
+        out: list[dict[str, Any]] = []
+        start = 1
+        page_size = 100
+        with httpx.Client(timeout=120.0) as client:
+            while True:
+                q = quote(f"SELECT * FROM Item STARTPOSITION {start} MAXRESULTS {page_size}")
+                url = f"{self.base_url()}/v3/company/{realm_id}/query?query={q}&minorversion={self._minor()}"
+                res = client.get(url, headers=_headers(access_token))
+                res.raise_for_status()
+                data = res.json()
+                batch = data.get("QueryResponse", {}).get("Item", []) or []
+                if isinstance(batch, dict):
+                    batch = [batch]
+                if not batch:
+                    break
+                out.extend(batch)
+                if len(batch) < page_size:
+                    break
+                start += page_size
+        return out
+
 
 def phone_block(number: str | None) -> dict[str, str] | None:
     if not number:
@@ -289,6 +355,74 @@ def datetime_from_qbo(value: str) -> datetime:
     if value.endswith("Z"):
         value = value[:-1] + "+00:00"
     return datetime.fromisoformat(value)
+
+
+def _item_decimal(val: Any) -> Decimal | None:
+    if val is None:
+        return None
+    try:
+        return Decimal(str(val))
+    except (ArithmeticError, ValueError, TypeError):
+        return None
+
+
+def _ref_id(ref: Any) -> str | None:
+    if not ref or not isinstance(ref, dict):
+        return None
+    v = ref.get("value")
+    return str(v) if v is not None else None
+
+
+def _ref_name(ref: Any) -> str | None:
+    if not ref or not isinstance(ref, dict):
+        return None
+    n = ref.get("name")
+    return str(n) if n is not None else None
+
+
+def apply_qbo_item_to_model(row: Any, qbo: dict[str, Any]) -> None:
+    """Map QBO Item JSON onto ProductAndService ORM row (flattened columns)."""
+    row.qbo_id = str(qbo.get("Id", row.qbo_id or ""))
+    row.sync_token = str(qbo.get("SyncToken", "")) or None
+    row.name = (qbo.get("Name") or getattr(row, "name", None) or "Item")[:500]
+    sku = qbo.get("Sku")
+    row.sku = (str(sku)[:200] if sku is not None else None)
+    row.item_type = qbo.get("Type")
+    row.active = bool(qbo.get("Active", True))
+    fqn = qbo.get("FullyQualifiedName")
+    row.fully_qualified_name = str(fqn)[:500] if fqn is not None else None
+    row.taxable = qbo.get("Taxable")
+
+    unit = qbo.get("UnitPrice")
+    pc = qbo.get("PurchaseCost")
+    if unit is None or pc is None:
+        sp = qbo.get("SalesOrPurchase") or qbo.get("SalesAndPurchase") or {}
+        if unit is None:
+            unit = sp.get("UnitPrice") or sp.get("SalesPrice")
+        if pc is None:
+            pc = sp.get("PurchaseCost")
+    row.unit_price = _item_decimal(unit)
+    row.purchase_cost = _item_decimal(pc)
+
+    row.description = qbo.get("Description")
+    row.purchase_desc = qbo.get("PurchaseDesc")
+
+    row.track_qty_on_hand = qbo.get("TrackQtyOnHand")
+    row.qty_on_hand = _item_decimal(qbo.get("QtyOnHand"))
+    inv = qbo.get("InvStartDate")
+    row.inv_start_date = str(inv) if inv is not None else None
+
+    pf = qbo.get("ParentRef") or {}
+    row.parent_qbo_id = _ref_id(pf)
+    row.parent_name = _ref_name(pf)
+
+    row.income_account_qbo_id = _ref_id(qbo.get("IncomeAccountRef"))
+    row.expense_account_qbo_id = _ref_id(qbo.get("ExpenseAccountRef"))
+    row.asset_account_qbo_id = _ref_id(qbo.get("AssetAccountRef"))
+
+    qt = qbo_time(qbo)
+    if qt:
+        row.qbo_last_updated = qt
 
 
 def qbo_time(qbo: dict[str, Any]) -> datetime | None:

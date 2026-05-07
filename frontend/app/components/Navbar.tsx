@@ -11,6 +11,7 @@ import { useAuth } from "@/lib/useAuth";
 const pageMeta: Record<string, { title: string; subtitle: string }> = {
   "/dashboard": { title: "Dashboard",  subtitle: "Overview of your automation activity" },
   "/customers": { title: "Customers",  subtitle: "Manage and review customer records" },
+  "/invoices": { title: "Invoices", subtitle: "Group centers for invoice generation" },
   "/import":    { title: "Import",     subtitle: "Upload and process invoice data" },
 };
 

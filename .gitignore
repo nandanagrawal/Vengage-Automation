@@ -1,2 +1,5 @@
 # QuickBooks OAuth token file (same relative layout as vengage-poc — sibling to backend/)
 tokens.json
+
+# Local customer uploads (created at runtime under API cwd)
+data/customer_attachments/

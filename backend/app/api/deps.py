@@ -3,6 +3,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
+from app.models.customer import Customer
 from app.models.user import User, UserRole
 from app.services.auth_service import decode_token
 from app.services.qbo_client import QuickBooksClient
@@ -40,3 +41,17 @@ def require_admin(current_user: User = Depends(get_current_user)) -> User:
 
 def require_any_role(current_user: User = Depends(get_current_user)) -> User:
     return current_user
+
+
+def assert_customer_access(db: Session, user: User, customer_id: int) -> Customer:
+    row = db.query(Customer).filter(Customer.id == customer_id).first()
+    if not row:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Customer not found")
+    if user.role == UserRole.admin:
+        return row
+    if user.role == UserRole.supervisor and row.created_by_id == user.id:
+        return row
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="You can only access customers you created",
+    )

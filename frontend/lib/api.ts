@@ -15,12 +15,25 @@ function authHeaders(): Record<string, string> {
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
+async function assertOk(r: Response): Promise<void> {
+  if (r.ok) return;
+  if (r.status === 401) {
+    if (typeof window !== "undefined") {
+      localStorage.removeItem("vengage_token");
+      window.location.href = "/login";
+    }
+    throw new Error("Session expired. Redirecting to login…");
+  }
+  const text = await r.text().catch(() => "");
+  throw new Error(text || r.statusText);
+}
+
 export async function apiGet<T>(path: string): Promise<T> {
   const r = await fetch(`${API_V1_BASE}${path}`, {
     cache: "no-store",
     headers: authHeaders(),
   });
-  if (!r.ok) throw new Error((await r.text()) || r.statusText);
+  await assertOk(r);
   return r.json() as Promise<T>;
 }
 
@@ -30,7 +43,7 @@ export async function apiPost<T>(path: string, body?: unknown): Promise<T> {
     headers: { "Content-Type": "application/json", ...authHeaders() },
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
-  if (!r.ok) throw new Error((await r.text()) || r.statusText);
+  await assertOk(r);
   return r.json() as Promise<T>;
 }
 
@@ -40,7 +53,7 @@ export async function apiPatch<T>(path: string, body?: unknown): Promise<T> {
     headers: { "Content-Type": "application/json", ...authHeaders() },
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
-  if (!r.ok) throw new Error((await r.text()) || r.statusText);
+  await assertOk(r);
   return r.json() as Promise<T>;
 }
 
@@ -49,7 +62,7 @@ export async function apiDelete<T>(path: string): Promise<T> {
     method: "DELETE",
     headers: authHeaders(),
   });
-  if (!r.ok) throw new Error((await r.text()) || r.statusText);
+  await assertOk(r);
   if (r.status === 204 || r.headers.get("content-length") === "0") return {} as T;
   const text = await r.text();
   return text ? (JSON.parse(text) as T) : ({} as T);
@@ -63,8 +76,25 @@ export async function apiUpload<T>(path: string, files: File[]): Promise<T> {
     headers: authHeaders(),
     body: form,
   });
-  if (!r.ok) throw new Error((await r.text()) || r.statusText);
+  await assertOk(r);
   return r.json() as Promise<T>;
+}
+
+export async function apiDownloadBlob(path: string): Promise<Blob> {
+  const r = await fetch(`${API_V1_BASE}${path}`, {
+    headers: authHeaders(),
+  });
+  await assertOk(r);
+  return r.blob();
+}
+
+export function downloadBlobAsFile(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 export async function qboAuthGet<T>(path: string): Promise<T> {
@@ -96,6 +126,21 @@ export function qboConnectUrl(): string {
 // ── Types ──────────────────────────────────────────────────────────────────
 
 export type CustomerStatus = "pending" | "approved" | "rejected";
+
+export type UploadAttachmentsResult = {
+  attachments: CustomerAttachmentRow[];
+  errors: string[];
+};
+
+export type CustomerAttachmentRow = {
+  id: number;
+  customer_id: number;
+  original_filename: string;
+  content_type: string;
+  size_bytes: number;
+  qbo_attachable_id: string | null;
+  created_at: string;
+};
 
 export type CustomerRow = {
   id: number;
@@ -148,6 +193,33 @@ export type CustomerRow = {
   updated_at: string;
   qbo_last_updated: string | null;
   last_pushed_to_qbo_at: string | null;
+  product_and_service_ids: number[];
+};
+
+export type ProductAndServiceRow = {
+  id: number;
+  qbo_id: string;
+  name: string;
+  sku: string | null;
+  item_type: string | null;
+  active: boolean;
+};
+
+export type CenterRow = {
+  id: number;
+  company_id: number;
+  name: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type InvoiceRow = {
+  id: number;
+  company_id: number;
+  title: string | null;
+  center_ids: number[];
+  created_at: string;
+  updated_at: string;
 };
 
 export type InvoiceActivityRow = {
@@ -162,6 +234,9 @@ export type SyncResult = {
   customers_pushed: number;
   customers_created_remote: number;
   invoice_activity_rows: number;
+  attachments_pruned: number;
+  items_upserted: number;
+  items_removed_local: number;
   message: string;
 };
 

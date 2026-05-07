@@ -8,12 +8,16 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.models.customer import Customer, CustomerStatus
+from app.models.customer_attachment import CustomerAttachment
 from app.models.invoice_email_activity import InvoiceEmailActivity
+from app.models.product_and_service import ProductAndService
 from app.schemas.customer import SyncResult
+from app.services.customer_attachment_storage import delete_stored_file
 from app.services.qbo_client import (
     QuickBooksClient,
     SupportsQuickBooks,
     apply_qbo_customer_to_model,
+    apply_qbo_item_to_model,
     customer_model_to_qbo_payload,
     effective_local_time,
     qbo_time,
@@ -33,6 +37,83 @@ def ensure_qbo_credentials() -> tuple[str, str]:
         "QuickBooks not connected. Use OAuth (GET /api/v1/auth/qbo/connect) or set "
         "QBO_ACCESS_TOKEN and QBO_REALM_ID for manual tokens."
     )
+
+
+def _prune_attachments_deleted_in_qbo(
+    db: Session,
+    client: SupportsQuickBooks,
+    token: str,
+    realm: str,
+) -> int:
+    """Remove local attachment rows whose QBO attachable no longer exists on the customer."""
+    pruned = 0
+    for row in (
+        db.query(Customer)
+        .filter(Customer.qbo_id.isnot(None))
+        .order_by(Customer.id)
+        .all()
+    ):
+        local_atts = (
+            db.query(CustomerAttachment)
+            .filter(CustomerAttachment.customer_id == row.id)
+            .all()
+        )
+        if not local_atts:
+            continue
+        try:
+            remote = client.query_attachables_for_customer(token, realm, str(row.qbo_id))
+        except Exception:
+            continue
+        remote_ids = {str(a.get("Id")) for a in remote if a.get("Id") is not None}
+        for att in local_atts:
+            qid = att.qbo_attachable_id
+            if not qid:
+                continue
+            if qid not in remote_ids:
+                delete_stored_file(att.storage_relpath)
+                db.delete(att)
+                pruned += 1
+        db.commit()
+    return pruned
+
+
+def _sync_items_from_qbo(
+    db: Session,
+    client: SupportsQuickBooks,
+    token: str,
+    realm: str,
+) -> tuple[int, int]:
+    """Upsert all QBO Items; remove local rows whose qbo_id is not in the QBO result."""
+    raw = client.query_items(token, realm)
+    fetched_ids: set[str] = set()
+    upserted = 0
+    for qbo_item in raw:
+        qid = str(qbo_item.get("Id", ""))
+        if not qid:
+            continue
+        fetched_ids.add(qid)
+        row = db.query(ProductAndService).filter(ProductAndService.qbo_id == qid).first()
+        if row is None:
+            row = ProductAndService(
+                qbo_id=qid,
+                name=qbo_item.get("Name") or "Item",
+                active=bool(qbo_item.get("Active", True)),
+            )
+            db.add(row)
+        apply_qbo_item_to_model(row, qbo_item)
+        db.add(row)
+        upserted += 1
+    db.commit()
+
+    qdel = db.query(ProductAndService)
+    if fetched_ids:
+        qdel = qdel.filter(ProductAndService.qbo_id.notin_(fetched_ids))
+    removed = 0
+    for dead in qdel.all():
+        db.delete(dead)
+        removed += 1
+    db.commit()
+    return upserted, removed
 
 
 def run_quickbooks_sync(db: Session, qbo: SupportsQuickBooks | None = None) -> SyncResult:
@@ -132,6 +213,11 @@ def run_quickbooks_sync(db: Session, qbo: SupportsQuickBooks | None = None) -> S
             db.commit()
             pushed += 1
 
+    # ── Customer attachments: drop local rows (and files) removed in QuickBooks
+    attachments_pruned = _prune_attachments_deleted_in_qbo(db, client, token, realm)
+
+    items_upserted, items_removed_local = _sync_items_from_qbo(db, client, token, realm)
+
     # ── Invoice email activity (last 30 days): replace snapshot
     since = date.today() - timedelta(days=30)
     invoices = client.query_invoice_email_rows(token, realm, since)
@@ -158,6 +244,9 @@ def run_quickbooks_sync(db: Session, qbo: SupportsQuickBooks | None = None) -> S
         customers_pushed=pushed,
         customers_created_remote=created_remote,
         invoice_activity_rows=activity_rows,
+        attachments_pruned=attachments_pruned,
+        items_upserted=items_upserted,
+        items_removed_local=items_removed_local,
         message="Sync completed",
     )
 

@@ -1,10 +1,13 @@
+from __future__ import annotations
+
 import enum
 from datetime import datetime
 
 from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Integer, Numeric, String, Text, func
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
+from app.models.product_and_service import customer_product_and_services
 
 
 class CustomerStatus(str, enum.Enum):
@@ -87,3 +90,27 @@ class Customer(Base):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
     qbo_last_updated: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    attachments: Mapped[list["CustomerAttachment"]] = relationship(
+        "CustomerAttachment",
+        back_populates="customer",
+        cascade="all, delete-orphan",
+    )
+
+    product_and_services: Mapped[list["ProductAndService"]] = relationship(
+        "ProductAndService",
+        secondary=customer_product_and_services,
+        back_populates="customers",
+    )
+
+    centers: Mapped[list["Center"]] = relationship(
+        "Center",
+        back_populates="company",
+        cascade="all, delete-orphan",
+    )
+
+    invoices: Mapped[list["Invoice"]] = relationship(
+        "Invoice",
+        back_populates="company",
+        cascade="all, delete-orphan",
+    )

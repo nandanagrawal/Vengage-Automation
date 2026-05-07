@@ -40,6 +40,9 @@ class Settings(BaseSettings):
 
     DATABASE_URL: str = "postgresql+psycopg2://postgres:postgres@localhost:5432/vengage"
 
+    # Local storage for customer file uploads (mirrored alongside QBO attach API). Relative paths are resolved from the API process working directory.
+    CUSTOMER_ATTACHMENTS_DIR: str = "data/customer_attachments"
+
     QBO_ENVIRONMENT: str = "sandbox"
     QBO_MINOR_VERSION: str = "65"
     QBO_ACCESS_TOKEN: str | None = None
@@ -57,7 +60,7 @@ class Settings(BaseSettings):
 
     # Auth
     JWT_SECRET: str = "change-me-in-production-use-a-long-random-string"
-    JWT_EXPIRE_MINUTES: int = 60 * 8  # 8 hours
+    JWT_EXPIRE_MINUTES: int = 60 * 24 * 7  # 7 days
 
 
 settings = Settings()

@@ -5,7 +5,23 @@ from __future__ import annotations
 from sqlalchemy.orm import Session
 
 from app.models.customer import Customer, CustomerStatus
+from app.models.product_and_service import ProductAndService
 from app.schemas.customer import CustomerCreate, CustomerUpdate
+
+
+def _apply_product_links(db: Session, row: Customer, ids: list[int] | None) -> None:
+    if ids is None:
+        return
+    uniq = list(dict.fromkeys(ids))
+    if not uniq:
+        row.product_and_services = []
+        return
+    products = db.query(ProductAndService).filter(ProductAndService.id.in_(uniq)).all()
+    found = {p.id for p in products}
+    if found != set(uniq):
+        missing = sorted(set(uniq) - found)
+        raise ValueError(f"Unknown product_and_service_ids: {missing}")
+    row.product_and_services = products
 
 
 def _apply_address_to_billing(row: Customer, addr: object | None) -> None:
@@ -79,6 +95,8 @@ def create_customer_row(
         _apply_address_to_shipping(row, body.shipping)
 
     db.add(row)
+    db.flush()
+    _apply_product_links(db, row, body.product_and_service_ids)
     db.commit()
     db.refresh(row)
     return row
@@ -130,6 +148,9 @@ def update_customer_row(db: Session, row: Customer, body: CustomerUpdate) -> Cus
         row.rate = body.rate
     if body.add_attachment_in_mail is not None:
         row.add_attachment_in_mail = body.add_attachment_in_mail
+
+    if body.product_and_service_ids is not None:
+        _apply_product_links(db, row, body.product_and_service_ids)
 
     if row.ship_same_as_billing:
         row.shipping_line1 = row.billing_line1

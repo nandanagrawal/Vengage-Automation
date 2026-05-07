@@ -3,7 +3,7 @@ from decimal import Decimal
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, EmailStr, Field
 
-from app.models.customer import CustomerStatus
+from app.models.customer import Customer, CustomerStatus
 
 
 class AddressMixin(BaseModel):
@@ -45,6 +45,7 @@ class CustomerCreate(BaseModel):
     notes: str | None = None
     rate: Decimal = Field(default=Decimal("0"), ge=0)
     add_attachment_in_mail: bool = False
+    product_and_service_ids: list[int] | None = None
 
 
 class CustomerUpdate(BaseModel):
@@ -75,6 +76,7 @@ class CustomerUpdate(BaseModel):
     notes: str | None = None
     rate: Decimal | None = Field(None, ge=0)
     add_attachment_in_mail: bool | None = None
+    product_and_service_ids: list[int] | None = None
 
 
 class CustomerResponse(BaseModel):
@@ -127,6 +129,7 @@ class CustomerResponse(BaseModel):
     notes: str | None = None
     rate: Decimal = Field(default=Decimal("0"))
     add_attachment_in_mail: bool = False
+    product_and_service_ids: list[int] = Field(default_factory=list)
 
     created_at: datetime
     updated_at: datetime
@@ -143,7 +146,17 @@ class SyncResult(BaseModel):
     customers_pushed: int = 0
     customers_created_remote: int = 0
     invoice_activity_rows: int = 0
+    attachments_pruned: int = 0
+    items_upserted: int = 0
+    items_removed_local: int = 0
     message: str = "OK"
+
+
+def customer_response_from_row(row: Customer) -> CustomerResponse:
+    base = CustomerResponse.model_validate(row, from_attributes=True)
+    return base.model_copy(
+        update={"product_and_service_ids": [p.id for p in row.product_and_services]},
+    )
 
 
 class InvoiceActivityItem(BaseModel):

@@ -390,7 +390,7 @@ function InvoicesPageContent() {
             key={tab}
             type="button"
             onClick={() => setActiveTab(tab)}
-            className={`px-5 py-2 rounded-lg text-sm font-semibold transition-colors capitalize ${
+            className={`px-5 py-2 rounded-lg text-sm font-semibold transition-colors ${
               activeTab === tab
                 ? "bg-indigo-600 text-white shadow"
                 : "text-slate-400 hover:text-white"

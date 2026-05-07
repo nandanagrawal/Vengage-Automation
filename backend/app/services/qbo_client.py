@@ -59,6 +59,21 @@ class SupportsQuickBooks(Protocol):
 
     def query_items(self, access_token: str, realm_id: str) -> list[dict[str, Any]]: ...
 
+    def create_invoice(
+        self,
+        access_token: str,
+        realm_id: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]: ...
+
+    def send_invoice(
+        self,
+        access_token: str,
+        realm_id: str,
+        invoice_id: str,
+        email: str | None = None,
+    ) -> dict[str, Any]: ...
+
 
 def _headers(access_token: str) -> dict[str, str]:
     return {
@@ -252,6 +267,53 @@ class QuickBooksClient:
                     break
                 start += page_size
         return out
+
+
+    def create_invoice(
+        self,
+        access_token: str,
+        realm_id: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        url = f"{self.base_url()}/v3/company/{realm_id}/invoice?minorversion={self._minor()}"
+        with httpx.Client(timeout=60.0) as client:
+            res = client.post(url, headers=_headers(access_token), json=payload)
+            if not res.is_success:
+                raise httpx.HTTPStatusError(
+                    f"{res.status_code} from QBO create_invoice: {res.text}",
+                    request=res.request,
+                    response=res,
+                )
+            return res.json().get("Invoice", {})
+
+    def send_invoice(
+        self,
+        access_token: str,
+        realm_id: str,
+        invoice_id: str,
+        email: str | None = None,
+    ) -> dict[str, Any]:
+        url = f"{self.base_url()}/v3/company/{realm_id}/invoice/{invoice_id}/send?minorversion={self._minor()}"
+        if email:
+            from urllib.parse import quote as _q
+            url += f"&sendTo={_q(email)}"
+        with httpx.Client(timeout=60.0) as client:
+            res = client.post(
+                url,
+                headers={
+                    "Authorization": f"Bearer {access_token}",
+                    "Accept": "application/json",
+                    "Content-Type": "application/octet-stream",
+                },
+                content=b"",
+            )
+            if not res.is_success:
+                raise httpx.HTTPStatusError(
+                    f"{res.status_code} from QBO send_invoice({invoice_id}): {res.text}",
+                    request=res.request,
+                    response=res,
+                )
+            return res.json().get("Invoice", {})
 
 
 def phone_block(number: str | None) -> dict[str, str] | None:

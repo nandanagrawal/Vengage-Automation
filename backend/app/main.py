@@ -6,12 +6,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.v1.endpoints import auth_qbo
 from app.api.v1.router import api_router
 from app.core.config import settings
-from app.db.session import init_db
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    init_db()
+    # Schema is managed by Alembic migrations — run `alembic upgrade head` before starting.
     yield
 
 

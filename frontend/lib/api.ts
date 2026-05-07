@@ -247,6 +247,90 @@ export type QboStatus = {
   environment: string;
 };
 
+export type InvoiceUploadDetail = {
+  customer: string;
+  group: string;
+  qbo_invoice_id: string;
+  invoice_number: string | null;
+  total_amount: number;
+  send_status: string;
+  sent: boolean;
+};
+
+export type InvoiceUploadResult = {
+  upload_id: number;
+  status: string;
+  total_center_rows: number;
+  centers_matched: number;
+  centers_skipped: number;
+  invoices_created: number;
+  invoices_failed: number;
+  invoice_details: InvoiceUploadDetail[];
+  errors: string[];
+};
+
+export async function apiUploadInvoiceFile(file: File): Promise<InvoiceUploadResult> {
+  const form = new FormData();
+  form.append("file", file);
+  const r = await fetch(`${API_V1_BASE}/invoice-uploads`, {
+    method: "POST",
+    headers: authHeaders(),
+    body: form,
+  });
+  await assertOk(r);
+  return r.json() as Promise<InvoiceUploadResult>;
+}
+
+export type UploadHistoryRow = {
+  id: number;
+  file_name: string;
+  status: string;
+  created_at: string;
+  total_invoices: number | null;
+  success_count: number | null;
+  failed_count: number | null;
+  uploaded_by: string | null;
+};
+
+export type GeneratedInvoiceCenterRow = {
+  id: number;
+  center_name: string;
+};
+
+export type GeneratedInvoiceLineItemRow = {
+  id: number;
+  product_name: string;
+  quantity: string;
+  rate: string;
+  amount: string;
+};
+
+export type GeneratedInvoiceRow = {
+  id: number;
+  invoice_number: string | null;
+  quickbooks_invoice_id: string | null;
+  customer_name: string | null;
+  center_group_name: string;
+  total_amount: string;
+  send_status: string;
+  error_message: string | null;
+  centers: GeneratedInvoiceCenterRow[];
+  line_items: GeneratedInvoiceLineItemRow[];
+};
+
+export type UploadDetailResponse = {
+  id: number;
+  file_name: string;
+  status: string;
+  created_at: string;
+  total_invoices: number | null;
+  success_count: number | null;
+  failed_count: number | null;
+  uploaded_by: string | null;
+  errors: string[];
+  generated_invoices: GeneratedInvoiceRow[];
+};
+
 export type AuthToken = { access_token: string; token_type: string };
 
 export type CurrentUser = {

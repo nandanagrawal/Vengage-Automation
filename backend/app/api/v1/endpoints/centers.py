@@ -35,13 +35,9 @@ def create_center(
 ):
     assert_customer_access(db, user, customer_id)
     name = body.name.strip()
-    exists = (
-        db.query(Center)
-        .filter(Center.company_id == customer_id, Center.name == name)
-        .first()
-    )
+    exists = db.query(Center).filter(Center.name == name).first()
     if exists:
-        raise HTTPException(status_code=409, detail=f"A center named '{name}' already exists for this customer.")
+        raise HTTPException(status_code=409, detail=f"A center named '{name}' already exists.")
     row = Center(company_id=customer_id, name=name)
     db.add(row)
     db.commit()
@@ -66,13 +62,9 @@ def update_center(
     if not row:
         raise HTTPException(status_code=404, detail="Center not found")
     name = body.name.strip()
-    conflict = (
-        db.query(Center)
-        .filter(Center.company_id == customer_id, Center.name == name, Center.id != center_id)
-        .first()
-    )
+    conflict = db.query(Center).filter(Center.name == name, Center.id != center_id).first()
     if conflict:
-        raise HTTPException(status_code=409, detail=f"A center named '{name}' already exists for this customer.")
+        raise HTTPException(status_code=409, detail=f"A center named '{name}' already exists.")
     row.name = name
     db.add(row)
     db.commit()

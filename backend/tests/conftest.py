@@ -30,8 +30,10 @@ init_db()
 from app.models.center import Center  # noqa: E402
 from app.models.customer import Customer  # noqa: E402
 from app.models.customer_attachment import CustomerAttachment  # noqa: E402
+from app.models.generated_invoice import GeneratedInvoice, GeneratedInvoiceCenter, GeneratedInvoiceLineItem  # noqa: E402
 from app.models.invoice import Invoice  # noqa: E402
 from app.models.invoice_email_activity import InvoiceEmailActivity  # noqa: E402
+from app.models.invoice_upload import InvoiceUpload  # noqa: E402
 from app.models.product_and_service import ProductAndService  # noqa: E402
 from app.models.user import User, UserRole  # noqa: E402
 from app.services.auth_service import create_access_token, hash_password  # noqa: E402
@@ -102,6 +104,20 @@ class FakeQBO:
         self.attachables_by_customer.setdefault(str(customer_id), []).append(rec)
         return {"Attachable": {"Id": aid, "FileName": filename}}
 
+    def create_invoice(self, access_token: str, realm_id: str, payload: dict) -> dict:
+        self._next_id += 1
+        inv_id = str(self._next_id)
+        obj = {"Id": inv_id, "SyncToken": "0", "EmailStatus": "NotSet", "DocNumber": f"INV-{self._next_id}"}
+        self.invoices.append({**payload, **obj})
+        return obj
+
+    def send_invoice(self, access_token: str, realm_id: str, invoice_id: str, email=None) -> dict:
+        for inv in self.invoices:
+            if str(inv.get("Id")) == str(invoice_id):
+                inv["EmailStatus"] = "EmailSent"
+                return inv
+        return {"Id": invoice_id, "EmailStatus": "EmailSent"}
+
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -132,6 +148,10 @@ def fake_qbo():
 @pytest.fixture(autouse=True)
 def reset_db():
     db = SessionLocal()
+    db.query(GeneratedInvoiceLineItem).delete()
+    db.query(GeneratedInvoiceCenter).delete()
+    db.query(GeneratedInvoice).delete()
+    db.query(InvoiceUpload).delete()
     db.query(Invoice).delete()
     db.query(InvoiceEmailActivity).delete()
     db.query(CustomerAttachment).delete()

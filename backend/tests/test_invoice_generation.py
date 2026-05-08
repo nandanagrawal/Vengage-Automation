@@ -8,8 +8,10 @@ import pytest
 
 from app.models.center import Center
 from app.models.customer import Customer, CustomerStatus
+from app.models.customer_product_and_service import CustomerProductAndService
 from app.models.invoice import Invoice
 from app.models.product_and_service import ProductAndService
+from app.models.service_code import ServiceCode
 from app.models.user import UserRole
 from app.services.invoice_generation import (
     GenerationResult,
@@ -44,13 +46,20 @@ def _make_xlsx(rows: list[list]) -> bytes:
 
 # ── DB helpers ────────────────────────────────────────────────────────────────
 
+def _make_service_code(db, code: str) -> ServiceCode:
+    sc = ServiceCode(code=code, status=True)
+    db.add(sc)
+    db.commit()
+    db.refresh(sc)
+    return sc
+
+
 def _make_customer(db, display_name: str, qbo_id: str | None = None, email: str | None = None) -> Customer:
     c = Customer(
         display_name=display_name,
         status=CustomerStatus.approved,
         qbo_id=qbo_id,
         primary_email=email,
-        rate=Decimal("0"),
         ship_same_as_billing=True,
     )
     db.add(c)
@@ -67,17 +76,29 @@ def _make_center(db, company_id: int, name: str) -> Center:
     return c
 
 
-def _make_product(db, name: str, qbo_id: str, unit_price: float | None) -> ProductAndService:
+def _make_product(db, name: str, qbo_id: str) -> ProductAndService:
     ps = ProductAndService(
         qbo_id=qbo_id,
         name=name,
         active=True,
-        unit_price=Decimal(str(unit_price)) if unit_price is not None else None,
     )
     db.add(ps)
     db.commit()
     db.refresh(ps)
     return ps
+
+
+def _link_service(db, customer: Customer, ps: ProductAndService, sc: ServiceCode, rate: float) -> CustomerProductAndService:
+    cps = CustomerProductAndService(
+        customer_id=customer.id,
+        product_and_service_id=ps.id,
+        service_code_id=sc.id,
+        rate=Decimal(str(rate)),
+    )
+    db.add(cps)
+    db.commit()
+    db.refresh(cps)
+    return cps
 
 
 def _make_grouping(db, company_id: int, centers: list[Center], title: str = "") -> Invoice:
@@ -180,11 +201,11 @@ def test_no_matching_centers_returns_errors(db_session):
 
 
 def test_customer_without_qbo_id_skipped(db_session):
+    sc = _make_service_code(db_session, "SC-A")
     customer = _make_customer(db_session, "No QBO", qbo_id=None)
     _make_center(db_session, customer.id, "alpha")
-    ps = _make_product(db_session, "Gardening", "qbo-g1", 10.0)
-    customer.product_and_services.append(ps)
-    db_session.commit()
+    ps = _make_product(db_session, "Gardening", "qbo-g1")
+    _link_service(db_session, customer, ps, sc, 10.0)
 
     qbo = FakeQBO()
     csv_bytes = _make_csv([["Center", "Gardening"], ["alpha", "3"]])
@@ -194,13 +215,13 @@ def test_customer_without_qbo_id_skipped(db_session):
     assert any("no QBO ID" in e for e in result.errors)
 
 
-def test_rate_from_product_not_from_file(db_session):
-    """Rate must come from product_and_services.unit_price, not the file."""
+def test_rate_from_customer_service_not_product(db_session):
+    """Rate must come from CustomerProductAndService.rate, not ProductAndService.unit_price."""
+    sc = _make_service_code(db_session, "SC-B")
     customer = _make_customer(db_session, "Rate Co", qbo_id="qbo-c1", email="a@b.com")
     ctr = _make_center(db_session, customer.id, "beta")
-    ps = _make_product(db_session, "Gardening", "qbo-g2", 7.50)
-    customer.product_and_services.append(ps)
-    db_session.commit()
+    ps = _make_product(db_session, "Gardening", "qbo-g2")
+    _link_service(db_session, customer, ps, sc, 7.50)
 
     qbo = FakeQBO()
     csv_bytes = _make_csv([["Center", "Gardening"], ["beta", "4"]])
@@ -214,26 +235,20 @@ def test_rate_from_product_not_from_file(db_session):
     assert line["Amount"] == 30.0
 
 
-def test_null_rate_skips_line_item(db_session):
-    customer = _make_customer(db_session, "Null Rate Co", qbo_id="qbo-c2", email="x@y.com")
-    _make_center(db_session, customer.id, "gamma")
-    ps = _make_product(db_session, "Cleaning", "qbo-c3", None)
-    customer.product_and_services.append(ps)
-    db_session.commit()
-
-    qbo = FakeQBO()
-    csv_bytes = _make_csv([["Center", "Cleaning"], ["gamma", "5"]])
-    result = generate_invoices(db_session, qbo, "tok", "realm", "f.csv", csv_bytes)
-
-    assert result.invoices_created == 0
-    assert any("no line items" in e for e in result.errors)
-
-
 def test_zero_rate_skips_line_item(db_session):
+    """A CustomerProductAndService with rate=0 should be skipped (shouldn't happen with validation, but guard it)."""
+    sc = _make_service_code(db_session, "SC-C")
     customer = _make_customer(db_session, "Zero Rate Co", qbo_id="qbo-c4", email="z@z.com")
     _make_center(db_session, customer.id, "delta")
-    ps = _make_product(db_session, "Gardening", "qbo-g5", 0.0)
-    customer.product_and_services.append(ps)
+    ps = _make_product(db_session, "Gardening", "qbo-g5")
+    # Insert directly bypassing schema validation to test the guard
+    cps = CustomerProductAndService(
+        customer_id=customer.id,
+        product_and_service_id=ps.id,
+        service_code_id=sc.id,
+        rate=Decimal("0"),
+    )
+    db_session.add(cps)
     db_session.commit()
 
     qbo = FakeQBO()
@@ -244,11 +259,11 @@ def test_zero_rate_skips_line_item(db_session):
 
 
 def test_center_matching_is_case_insensitive(db_session):
+    sc = _make_service_code(db_session, "SC-D")
     customer = _make_customer(db_session, "Case Co", qbo_id="qbo-case", email="case@case.com")
     _make_center(db_session, customer.id, "Alpha")
-    ps = _make_product(db_session, "Gardening", "qbo-g6", 5.0)
-    customer.product_and_services.append(ps)
-    db_session.commit()
+    ps = _make_product(db_session, "Gardening", "qbo-g6")
+    _link_service(db_session, customer, ps, sc, 5.0)
 
     qbo = FakeQBO()
     # "alpha" (lowercase) should match "Alpha" (case-insensitive)
@@ -262,11 +277,11 @@ def test_center_matching_is_case_insensitive(db_session):
 
 def test_product_column_matching_is_case_insensitive(db_session):
     """Column 'GARDENING' in file should match product named 'Gardening'."""
+    sc = _make_service_code(db_session, "SC-E")
     customer = _make_customer(db_session, "Upper Co", qbo_id="qbo-upper", email="u@u.com")
     _make_center(db_session, customer.id, "epsilon")
-    ps = _make_product(db_session, "Gardening", "qbo-g7", 10.0)
-    customer.product_and_services.append(ps)
-    db_session.commit()
+    ps = _make_product(db_session, "Gardening", "qbo-g7")
+    _link_service(db_session, customer, ps, sc, 10.0)
 
     qbo = FakeQBO()
     csv_bytes = _make_csv([["Center", "GARDENING"], ["epsilon", "2"]])
@@ -277,13 +292,13 @@ def test_product_column_matching_is_case_insensitive(db_session):
 
 def test_grouped_centers_single_invoice(db_session):
     """ac + acc grouped → one invoice with summed quantities."""
+    sc = _make_service_code(db_session, "SC-F")
     customer = _make_customer(db_session, "Grouped Co", qbo_id="qbo-grp", email="g@g.com")
     ctr_ac = _make_center(db_session, customer.id, "ac")
     ctr_acc = _make_center(db_session, customer.id, "acc")
     _make_grouping(db_session, customer.id, [ctr_ac, ctr_acc])
-    ps = _make_product(db_session, "Gardening", "qbo-g8", 2.0)
-    customer.product_and_services.append(ps)
-    db_session.commit()
+    ps = _make_product(db_session, "Gardening", "qbo-g8")
+    _link_service(db_session, customer, ps, sc, 2.0)
 
     qbo = FakeQBO()
     csv_bytes = _make_csv([
@@ -302,11 +317,11 @@ def test_grouped_centers_single_invoice(db_session):
 
 def test_standalone_center_individual_invoice(db_session):
     """ad not in any grouping → own invoice."""
+    sc = _make_service_code(db_session, "SC-G")
     customer = _make_customer(db_session, "Standalone Co", qbo_id="qbo-sa", email="s@s.com")
     _make_center(db_session, customer.id, "ad")
-    ps = _make_product(db_session, "Gardening", "qbo-g9", 3.0)
-    customer.product_and_services.append(ps)
-    db_session.commit()
+    ps = _make_product(db_session, "Gardening", "qbo-g9")
+    _link_service(db_session, customer, ps, sc, 3.0)
 
     qbo = FakeQBO()
     csv_bytes = _make_csv([["Center", "Gardening"], ["ad", "2"]])
@@ -320,14 +335,14 @@ def test_standalone_center_individual_invoice(db_session):
 
 def test_mixed_grouped_and_standalone(db_session):
     """ac+acc grouped, ad standalone → 2 invoices total."""
+    sc = _make_service_code(db_session, "SC-H")
     customer = _make_customer(db_session, "Mixed Co", qbo_id="qbo-mix", email="m@m.com")
     ctr_ac = _make_center(db_session, customer.id, "ac2")
     ctr_acc = _make_center(db_session, customer.id, "acc2")
     ctr_ad = _make_center(db_session, customer.id, "ad2")
     _make_grouping(db_session, customer.id, [ctr_ac, ctr_acc])
-    ps = _make_product(db_session, "Gardening", "qbo-g10", 1.0)
-    customer.product_and_services.append(ps)
-    db_session.commit()
+    ps = _make_product(db_session, "Gardening", "qbo-g10")
+    _link_service(db_session, customer, ps, sc, 1.0)
 
     qbo = FakeQBO()
     csv_bytes = _make_csv([
@@ -346,11 +361,11 @@ def test_mixed_grouped_and_standalone(db_session):
 
 def test_unmatched_product_column_ignored(db_session):
     """Columns not matching any synced product are silently ignored."""
+    sc = _make_service_code(db_session, "SC-I")
     customer = _make_customer(db_session, "Extra Col Co", qbo_id="qbo-ec", email="e@e.com")
     _make_center(db_session, customer.id, "zeta")
-    ps = _make_product(db_session, "Gardening", "qbo-g11", 5.0)
-    customer.product_and_services.append(ps)
-    db_session.commit()
+    ps = _make_product(db_session, "Gardening", "qbo-g11")
+    _link_service(db_session, customer, ps, sc, 5.0)
 
     qbo = FakeQBO()
     # "Unknown Service" has no matching product — should be ignored
@@ -363,11 +378,11 @@ def test_unmatched_product_column_ignored(db_session):
 
 def test_customer_without_matching_products_skipped(db_session):
     """Customer whose products don't match any file column → skipped with error."""
+    sc = _make_service_code(db_session, "SC-J")
     customer = _make_customer(db_session, "No Match Co", qbo_id="qbo-nm", email="nm@nm.com")
     _make_center(db_session, customer.id, "eta")
-    ps = _make_product(db_session, "Plumbing", "qbo-p1", 20.0)
-    customer.product_and_services.append(ps)
-    db_session.commit()
+    ps = _make_product(db_session, "Plumbing", "qbo-p1")
+    _link_service(db_session, customer, ps, sc, 20.0)
 
     qbo = FakeQBO()
     csv_bytes = _make_csv([["Center", "Gardening"], ["eta", "5"]])
@@ -379,11 +394,11 @@ def test_customer_without_matching_products_skipped(db_session):
 
 def test_invoice_sent_after_creation(db_session):
     """Invoice must be created and then sent (EmailStatus = EmailSent in FakeQBO)."""
+    sc = _make_service_code(db_session, "SC-K")
     customer = _make_customer(db_session, "Send Co", qbo_id="qbo-send", email="send@send.com")
     _make_center(db_session, customer.id, "theta")
-    ps = _make_product(db_session, "Gardening", "qbo-g12", 5.0)
-    customer.product_and_services.append(ps)
-    db_session.commit()
+    ps = _make_product(db_session, "Gardening", "qbo-g12")
+    _link_service(db_session, customer, ps, sc, 5.0)
 
     qbo = FakeQBO()
     csv_bytes = _make_csv([["Center", "Gardening"], ["theta", "1"]])
@@ -395,11 +410,11 @@ def test_invoice_sent_after_creation(db_session):
 
 
 def test_zero_quantity_produces_no_invoice(db_session):
+    sc = _make_service_code(db_session, "SC-L")
     customer = _make_customer(db_session, "Zero Qty Co", qbo_id="qbo-zq", email="zq@zq.com")
     _make_center(db_session, customer.id, "iota")
-    ps = _make_product(db_session, "Gardening", "qbo-g13", 10.0)
-    customer.product_and_services.append(ps)
-    db_session.commit()
+    ps = _make_product(db_session, "Gardening", "qbo-g13")
+    _link_service(db_session, customer, ps, sc, 10.0)
 
     qbo = FakeQBO()
     csv_bytes = _make_csv([["Center", "Gardening"], ["iota", "0"]])
@@ -410,12 +425,13 @@ def test_zero_quantity_produces_no_invoice(db_session):
 
 def test_multiple_products_per_customer(db_session):
     """Customer with two products → two line items in the invoice."""
+    sc = _make_service_code(db_session, "SC-M")
     customer = _make_customer(db_session, "Multi PS Co", qbo_id="qbo-mps", email="mps@mps.com")
     _make_center(db_session, customer.id, "kappa")
-    ps1 = _make_product(db_session, "Gardening", "qbo-g14", 2.0)
-    ps2 = _make_product(db_session, "Cleaning", "qbo-c14", 3.0)
-    customer.product_and_services.extend([ps1, ps2])
-    db_session.commit()
+    ps1 = _make_product(db_session, "Gardening", "qbo-g14")
+    ps2 = _make_product(db_session, "Cleaning", "qbo-c14")
+    _link_service(db_session, customer, ps1, sc, 2.0)
+    _link_service(db_session, customer, ps2, sc, 3.0)
 
     qbo = FakeQBO()
     csv_bytes = _make_csv([["Center", "Gardening", "Cleaning"], ["kappa", "4", "6"]])
@@ -430,11 +446,11 @@ def test_multiple_products_per_customer(db_session):
 
 def test_skipped_center_does_not_block_other_centers(db_session):
     """Unknown center in file is skipped; known centers still generate invoices."""
+    sc = _make_service_code(db_session, "SC-N")
     customer = _make_customer(db_session, "Mixed Skip Co", qbo_id="qbo-ms", email="ms@ms.com")
     _make_center(db_session, customer.id, "lambda")
-    ps = _make_product(db_session, "Gardening", "qbo-g15", 4.0)
-    customer.product_and_services.append(ps)
-    db_session.commit()
+    ps = _make_product(db_session, "Gardening", "qbo-g15")
+    _link_service(db_session, customer, ps, sc, 4.0)
 
     qbo = FakeQBO()
     csv_bytes = _make_csv([
@@ -451,11 +467,11 @@ def test_skipped_center_does_not_block_other_centers(db_session):
 
 def test_amount_calculation(db_session):
     """Amount = Qty × Rate, rounded to 2 decimal places."""
+    sc = _make_service_code(db_session, "SC-O")
     customer = _make_customer(db_session, "Calc Co", qbo_id="qbo-calc", email="c@c.com")
     _make_center(db_session, customer.id, "mu")
-    ps = _make_product(db_session, "Gardening", "qbo-g16", 1.50)
-    customer.product_and_services.append(ps)
-    db_session.commit()
+    ps = _make_product(db_session, "Gardening", "qbo-g16")
+    _link_service(db_session, customer, ps, sc, 1.50)
 
     qbo = FakeQBO()
     csv_bytes = _make_csv([["Center", "Gardening"], ["mu", "7"]])
@@ -508,11 +524,11 @@ def test_db_records_persisted_when_upload_id_provided(db_session):
     db_session.commit()
     db_session.refresh(upload)
 
+    sc = _make_service_code(db_session, "SC-P")
     customer = _make_customer(db_session, "Persist Co", qbo_id="qbo-persist", email="p@p.com")
     _make_center(db_session, customer.id, "persist_center")
-    ps = _make_product(db_session, "Gardening", "qbo-gp1", 10.0)
-    customer.product_and_services.append(ps)
-    db_session.commit()
+    ps = _make_product(db_session, "Gardening", "qbo-gp1")
+    _link_service(db_session, customer, ps, sc, 10.0)
 
     qbo = FakeQBO()
     csv_bytes = _make_csv([["Center", "Gardening"], ["persist_center", "3"]])
@@ -549,11 +565,11 @@ def test_db_records_persisted_when_upload_id_provided(db_session):
 
 def test_invoice_number_from_qbo_docnumber(db_session):
     """DocNumber from QBO response is stored as invoice_number."""
+    sc = _make_service_code(db_session, "SC-Q")
     customer = _make_customer(db_session, "DocNum Co", qbo_id="qbo-dn", email="dn@dn.com")
     _make_center(db_session, customer.id, "dn_center")
-    ps = _make_product(db_session, "Gardening", "qbo-gdn", 5.0)
-    customer.product_and_services.append(ps)
-    db_session.commit()
+    ps = _make_product(db_session, "Gardening", "qbo-gdn")
+    _link_service(db_session, customer, ps, sc, 5.0)
 
     qbo = FakeQBO()
     csv_bytes = _make_csv([["Center", "Gardening"], ["dn_center", "2"]])
@@ -563,18 +579,18 @@ def test_invoice_number_from_qbo_docnumber(db_session):
     assert result.invoice_details[0].invoice_number is not None
     assert result.invoice_details[0].invoice_number.startswith("INV-")
     assert result.invoice_details[0].send_status == "sent"
-    assert result.invoice_details[0].sent is True  # property still works
+    assert result.invoice_details[0].sent is True
 
 
 def test_no_db_records_without_upload_id(db_session):
     """Without invoice_upload_id, no GeneratedInvoice records are created."""
     from app.models.generated_invoice import GeneratedInvoice
 
+    sc = _make_service_code(db_session, "SC-R")
     customer = _make_customer(db_session, "NoPersist Co", qbo_id="qbo-np", email="np@np.com")
     _make_center(db_session, customer.id, "np_center")
-    ps = _make_product(db_session, "Gardening", "qbo-gnp", 5.0)
-    customer.product_and_services.append(ps)
-    db_session.commit()
+    ps = _make_product(db_session, "Gardening", "qbo-gnp")
+    _link_service(db_session, customer, ps, sc, 5.0)
 
     qbo = FakeQBO()
     csv_bytes = _make_csv([["Center", "Gardening"], ["np_center", "1"]])
@@ -585,7 +601,7 @@ def test_no_db_records_without_upload_id(db_session):
     assert count == 0
 
 
-# ── New endpoint tests ────────────────────────────────────────────────────────
+# ── Upload endpoint tests ─────────────────────────────────────────────────────
 
 def test_get_upload_detail_404(admin_client):
     r = admin_client.get("/api/v1/invoice-uploads/99999")

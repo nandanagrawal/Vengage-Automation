@@ -25,7 +25,12 @@ async function assertOk(r: Response): Promise<void> {
     throw new Error("Session expired. Redirecting to login…");
   }
   const text = await r.text().catch(() => "");
-  throw new Error(text || r.statusText);
+  let message = text || r.statusText;
+  try {
+    const json = JSON.parse(text) as Record<string, unknown>;
+    if (json?.detail) message = String(json.detail);
+  } catch { /* not JSON */ }
+  throw new Error(message);
 }
 
 export async function apiGet<T>(path: string): Promise<T> {
@@ -186,14 +191,37 @@ export type CustomerRow = {
   shipping_country: string | null;
 
   notes: string | null;
-  rate: string;
   add_attachment_in_mail: boolean;
 
   created_at: string;
   updated_at: string;
   qbo_last_updated: string | null;
   last_pushed_to_qbo_at: string | null;
-  product_and_service_ids: number[];
+  customer_services: CustomerServiceRow[];
+  customer_type_ids: number[];
+};
+
+export type CustomerTypeRow = {
+  id: number;
+  name: string;
+  status: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ServiceCodeRow = {
+  id: number;
+  code: string;
+  status: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type CustomerServiceRow = {
+  id: number;
+  product_and_service_id: number;
+  service_code_id: number;
+  rate: string;
 };
 
 export type ProductAndServiceRow = {
@@ -329,6 +357,15 @@ export type UploadDetailResponse = {
   uploaded_by: string | null;
   errors: string[];
   generated_invoices: GeneratedInvoiceRow[];
+};
+
+export type DashboardStats = {
+  total_customers: number;
+  imports_today: number;
+  invoices_sent: number;
+  delivery_failures: number;
+  pending_customers: number;
+  approved_customers: number;
 };
 
 export type AuthToken = { access_token: string; token_type: string };

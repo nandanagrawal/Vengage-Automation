@@ -3,11 +3,11 @@ from __future__ import annotations
 import enum
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Integer, Numeric, String, Text, func
+from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
-from app.models.product_and_service import customer_product_and_services
+from app.models.customer_type import customer_customer_types
 
 
 class CustomerStatus(str, enum.Enum):
@@ -78,7 +78,6 @@ class Customer(Base):
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # App-specific extensions
-    rate: Mapped[float] = mapped_column(Numeric(18, 4), nullable=False, default=0)
     add_attachment_in_mail: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     last_pushed_to_qbo_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -97,10 +96,10 @@ class Customer(Base):
         cascade="all, delete-orphan",
     )
 
-    product_and_services: Mapped[list["ProductAndService"]] = relationship(
-        "ProductAndService",
-        secondary=customer_product_and_services,
-        back_populates="customers",
+    customer_services: Mapped[list["CustomerProductAndService"]] = relationship(
+        "CustomerProductAndService",
+        back_populates="customer",
+        cascade="all, delete-orphan",
     )
 
     centers: Mapped[list["Center"]] = relationship(
@@ -113,4 +112,10 @@ class Customer(Base):
         "Invoice",
         back_populates="company",
         cascade="all, delete-orphan",
+    )
+
+    customer_types: Mapped[list["CustomerType"]] = relationship(
+        "CustomerType",
+        secondary=customer_customer_types,
+        back_populates="customers",
     )

@@ -135,7 +135,6 @@ def run_quickbooks_sync(db: Session, qbo: SupportsQuickBooks | None = None) -> S
             row = Customer(
                 display_name=qc.get("DisplayName") or "Customer",
                 status=CustomerStatus.approved,  # from QBO = already approved
-                rate=0,
                 add_attachment_in_mail=False,
             )
             apply_qbo_customer_to_model(row, qc)
@@ -148,13 +147,11 @@ def run_quickbooks_sync(db: Session, qbo: SupportsQuickBooks | None = None) -> S
 
         local_eff = effective_local_time(row)
         if qt and qt > local_eff:
-            rate = row.rate
             attach = row.add_attachment_in_mail
             cc = row.cc_email
             bcc = row.bcc_email
             other = row.other_contact
             apply_qbo_customer_to_model(row, qc)
-            row.rate = rate
             row.add_attachment_in_mail = attach
             row.cc_email = cc
             row.bcc_email = bcc
@@ -262,17 +259,14 @@ def upsert_customer_from_qbo_id(db: Session, qbo: SupportsQuickBooks, customer_i
         row = Customer(
             display_name=qc.get("DisplayName") or "Customer",
             status=CustomerStatus.approved,  # from QBO = already approved
-            rate=0,
             add_attachment_in_mail=False,
         )
         db.add(row)
-    rate = row.rate
     attach = row.add_attachment_in_mail
     cc = row.cc_email
     bcc = row.bcc_email
     other = row.other_contact
     apply_qbo_customer_to_model(row, qc)
-    row.rate = rate
     row.add_attachment_in_mail = attach
     row.cc_email = cc
     row.bcc_email = bcc

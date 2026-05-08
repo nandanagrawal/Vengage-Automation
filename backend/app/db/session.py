@@ -33,12 +33,15 @@ def get_db() -> Generator[Session, None, None]:
 def init_db() -> None:
     import app.models.center  # noqa: F401
     import app.models.customer  # noqa: F401
+    import app.models.customer_type  # noqa: F401
     import app.models.customer_attachment  # noqa: F401
+    import app.models.customer_product_and_service  # noqa: F401
     import app.models.invoice  # noqa: F401
     import app.models.invoice_email_activity  # noqa: F401
     import app.models.generated_invoice  # noqa: F401
     import app.models.invoice_upload  # noqa: F401
     import app.models.product_and_service  # noqa: F401
+    import app.models.service_code  # noqa: F401
     import app.models.user  # noqa: F401
 
     Base.metadata.create_all(bind=engine)

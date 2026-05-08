@@ -6,7 +6,7 @@ import { apiDelete, apiGet, apiPatch, apiPost, apiUpload, type CustomerRow, type
 import { useAuth } from "@/lib/useAuth";
 import { CustomerModal } from "./CustomerModal";
 
-type SortKey = "display_name" | "primary_email" | "rate" | "status";
+type SortKey = "display_name" | "primary_email" | "status";
 type SortDir = "asc" | "desc";
 
 function statusStyle(s: string) {
@@ -27,8 +27,8 @@ function SortIcon({ active, dir }: { active: boolean; dir: SortDir }) {
   );
 }
 
-// Col layout: Customer | Email | Rate | Attach | Status | Actions
-const COLS = "grid-cols-[minmax(0,2fr)_minmax(0,1.5fr)_6rem_4.5rem_8rem_12rem]";
+// Col layout: Customer | Email | Attach | Status | Actions
+const COLS = "grid-cols-[minmax(0,2fr)_minmax(0,1.5fr)_4.5rem_8rem_12rem]";
 
 export default function CustomersPage() {
   const { user } = useAuth();
@@ -170,7 +170,6 @@ export default function CustomersPage() {
   const sorted = useMemo(() => {
     return [...filtered].sort((a, b) => {
       const mul = sortDir === "asc" ? 1 : -1;
-      if (sortKey === "rate") return (parseFloat(String(a.rate ?? 0)) - parseFloat(String(b.rate ?? 0))) * mul;
       if (sortKey === "status") {
         const ao = STATUS_ORDER[a.status as keyof typeof STATUS_ORDER] ?? 9;
         const bo = STATUS_ORDER[b.status as keyof typeof STATUS_ORDER] ?? 9;
@@ -186,7 +185,6 @@ export default function CustomersPage() {
   const headers: { label: string; key?: SortKey; align?: string }[] = [
     { label: "Customer", key: "display_name" },
     { label: "Email", key: "primary_email" },
-    { label: "Rate", key: "rate", align: "text-right" },
     { label: "Attach", align: "text-center" },
     { label: "Status", key: "status", align: "text-center" },
     { label: "Actions", align: "text-center" },
@@ -304,9 +302,6 @@ export default function CustomersPage() {
 
                 {/* Email */}
                 <span className="text-slate-400 text-sm truncate pr-4">{c.primary_email ?? "—"}</span>
-
-                {/* Rate */}
-                <span className="text-slate-300 text-sm font-mono text-right pr-4">{c.rate}</span>
 
                 {/* Attach */}
                 <div className="flex justify-center">

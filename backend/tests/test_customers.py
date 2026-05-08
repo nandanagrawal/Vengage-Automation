@@ -10,7 +10,6 @@ _BASE = {
     "primary_email": "billing@testlabs.example",
     "given_name": "Sam",
     "family_name": "Rivera",
-    "rate": "125.50",
     "add_attachment_in_mail": True,
     "billing": {"line1": "1 Main St", "city": "Sydney", "zip": "2000"},
     "ship_same_as_billing": True,
@@ -24,7 +23,6 @@ def test_admin_creates_customer_approved_and_pushed_to_qbo(admin_client, fake_qb
     assert r.status_code == 200, r.text
     data = r.json()
     assert data["status"] == "approved"
-    assert float(data["rate"]) == pytest.approx(125.5)
     assert data["add_attachment_in_mail"] is True
     assert data["qbo_id"] is not None  # admin creation pushes to QBO
 
@@ -52,24 +50,6 @@ def test_both_roles_can_list_all_customers(admin_client, supervisor_client):
     rows = admin_client.get("/api/v1/customers").json()
     names = [c["display_name"] for c in rows]
     assert "Acme" in names and "Beta" in names
-
-
-# ── Rate field validation ─────────────────────────────────────────────────────
-
-def test_negative_rate_rejected(admin_client):
-    assert admin_client.post("/api/v1/customers", json={**_BASE, "rate": "-1"}).status_code == 422
-
-
-def test_zero_rate_allowed(admin_client):
-    r = admin_client.post("/api/v1/customers", json={**_BASE, "rate": "0"})
-    assert r.status_code == 200
-    assert float(r.json()["rate"]) == 0.0
-
-
-def test_high_precision_rate(admin_client):
-    r = admin_client.post("/api/v1/customers", json={**_BASE, "rate": "999.9999"})
-    assert r.status_code == 200
-    assert float(r.json()["rate"]) == pytest.approx(999.9999, rel=1e-4)
 
 
 # ── Approval workflow ─────────────────────────────────────────────────────────
@@ -198,14 +178,14 @@ def test_webhook_non_customer_entity_ignored(client):
 # ── Extra fields ──────────────────────────────────────────────────────────────
 
 def test_add_attachment_in_mail_defaults_false(admin_client):
-    r = admin_client.post("/api/v1/customers", json={"display_name": "Simple Co", "rate": "0"})
+    r = admin_client.post("/api/v1/customers", json={"display_name": "Simple Co"})
     assert r.status_code == 200
     assert r.json()["add_attachment_in_mail"] is False
 
 
 def test_add_attachment_in_mail_true_persisted(admin_client):
     r = admin_client.post("/api/v1/customers", json={
-        "display_name": "Attach Co", "rate": "10", "add_attachment_in_mail": True
+        "display_name": "Attach Co", "add_attachment_in_mail": True
     })
     assert r.status_code == 200
     assert r.json()["add_attachment_in_mail"] is True
@@ -294,33 +274,49 @@ def test_sync_upserts_and_prunes_qbo_items(admin_client, fake_qbo):
     assert products2[0]["name"] == "Alpha Renamed"
 
 
-def test_customer_create_with_product_links(admin_client, fake_qbo):
+def test_customer_create_with_services(admin_client, db_session, fake_qbo):
+    from app.models.service_code import ServiceCode
+    sc = ServiceCode(code="TEST-SC", status=True)
+    db_session.add(sc)
+    db_session.commit()
+    db_session.refresh(sc)
+
     fake_qbo.items = [{"Id": "10", "Name": "Widget", "Type": "Service", "Active": True, "SyncToken": "0"}]
     admin_client.post("/api/v1/sync/quickbooks")
     pid = admin_client.get("/api/v1/product-and-services").json()[0]["id"]
 
     r = admin_client.post(
         "/api/v1/customers",
-        json={**_BASE, "display_name": "Linked Co", "product_and_service_ids": [pid]},
+        json={**_BASE, "display_name": "Linked Co", "customer_services": [
+            {"product_and_service_id": pid, "service_code_id": sc.id, "rate": "25.00"}
+        ]},
     )
     assert r.status_code == 200
     data = r.json()
-    assert data["product_and_service_ids"] == [pid]
+    assert len(data["customer_services"]) == 1
+    assert data["customer_services"][0]["product_and_service_id"] == pid
+    assert float(data["customer_services"][0]["rate"]) == 25.0
 
 
-def test_customer_invalid_product_ids_rejected(admin_client):
+def test_customer_invalid_service_code_rejected(admin_client, fake_qbo):
+    fake_qbo.items = [{"Id": "11", "Name": "Gadget", "Type": "Service", "Active": True, "SyncToken": "0"}]
+    admin_client.post("/api/v1/sync/quickbooks")
+    pid = admin_client.get("/api/v1/product-and-services").json()[0]["id"]
+
     r = admin_client.post(
         "/api/v1/customers",
-        json={**_BASE, "display_name": "Bad Co", "product_and_service_ids": [99999]},
+        json={**_BASE, "display_name": "Bad SC Co", "customer_services": [
+            {"product_and_service_id": pid, "service_code_id": 99999, "rate": "10.00"}
+        ]},
     )
     assert r.status_code == 422
 
 
-def test_qbo_customer_payload_excludes_app_product_links():
+def test_qbo_customer_payload_excludes_app_service_links():
     from app.models.customer import Customer
     from app.services.qbo_client import customer_model_to_qbo_payload
 
-    row = Customer(display_name="X Co", rate=0, add_attachment_in_mail=False)
+    row = Customer(display_name="X Co", add_attachment_in_mail=False)
     payload = customer_model_to_qbo_payload(row)
-    assert "product_and_service" not in payload
+    assert "customer_services" not in payload
     assert "Item" not in payload

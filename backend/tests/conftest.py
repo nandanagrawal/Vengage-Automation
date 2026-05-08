@@ -30,11 +30,14 @@ init_db()
 from app.models.center import Center  # noqa: E402
 from app.models.customer import Customer  # noqa: E402
 from app.models.customer_attachment import CustomerAttachment  # noqa: E402
+from app.models.customer_product_and_service import CustomerProductAndService  # noqa: E402
+from app.models.customer_type import CustomerType  # noqa: E402
 from app.models.generated_invoice import GeneratedInvoice, GeneratedInvoiceCenter, GeneratedInvoiceLineItem  # noqa: E402
 from app.models.invoice import Invoice  # noqa: E402
 from app.models.invoice_email_activity import InvoiceEmailActivity  # noqa: E402
 from app.models.invoice_upload import InvoiceUpload  # noqa: E402
 from app.models.product_and_service import ProductAndService  # noqa: E402
+from app.models.service_code import ServiceCode  # noqa: E402
 from app.models.user import User, UserRole  # noqa: E402
 from app.services.auth_service import create_access_token, hash_password  # noqa: E402
 
@@ -155,9 +158,12 @@ def reset_db():
     db.query(Invoice).delete()
     db.query(InvoiceEmailActivity).delete()
     db.query(CustomerAttachment).delete()
+    db.query(CustomerProductAndService).delete()
     db.query(ProductAndService).delete()
+    db.query(ServiceCode).delete()
     db.query(Center).delete()
     db.query(Customer).delete()
+    db.query(CustomerType).delete()
     db.query(User).delete()
     db.commit()
     db.close()

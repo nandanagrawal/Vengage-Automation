@@ -2,7 +2,8 @@
 
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { apiDelete, apiGet, apiPatch, apiPost, type CenterRow, type CustomerRow, type InvoiceRow } from "@/lib/api";
+import { apiDelete, apiGet, apiPatch, apiPost, type CenterRow, type CustomerRow, type CustomerTypeRow, type InvoiceRow, type ServiceCodeRow } from "@/lib/api";
+import { ToastContainer, useToast } from "@/app/components/Toast";
 
 // ── Styles ────────────────────────────────────────────────────────────────────
 
@@ -26,11 +27,11 @@ function SortIcon({ active, dir }: { active: boolean; dir: SortDir }) {
 
 function InvoicesPageContent() {
   const searchParams = useSearchParams();
+  const { toasts, push: pushToast, dismiss: dismissToast } = useToast();
 
   const [customers, setCustomers] = useState<CustomerRow[]>([]);
   const [invoices, setInvoices] = useState<InvoiceRow[]>([]);
   const [centerNameById, setCenterNameById] = useState<Record<number, string>>({});
-  const [loadError, setLoadError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [deletingId, setDeletingId] = useState<number | null>(null);
 
@@ -42,7 +43,27 @@ function InvoicesPageContent() {
   const [title, setTitle] = useState("");
 
   // Tabs
-  const [activeTab, setActiveTab] = useState<"grouping" | "listing">("grouping");
+  const [activeTab, setActiveTab] = useState<"grouping" | "listing" | "customer_type" | "service_code">("grouping");
+
+  // Customer Type tab state
+  const [customerTypes, setCustomerTypes] = useState<CustomerTypeRow[]>([]);
+  const [ctLoading, setCtLoading] = useState(false);
+  const [ctNewName, setCtNewName] = useState("");
+  const [ctCreating, setCtCreating] = useState(false);
+  const [ctEditId, setCtEditId] = useState<number | null>(null);
+  const [ctEditName, setCtEditName] = useState("");
+  const [ctEditSaving, setCtEditSaving] = useState(false);
+  const [ctDeletingId, setCtDeletingId] = useState<number | null>(null);
+
+  // Service Code tab state
+  const [serviceCodes, setServiceCodes] = useState<ServiceCodeRow[]>([]);
+  const [scLoading, setScLoading] = useState(false);
+  const [scNewCode, setScNewCode] = useState("");
+  const [scCreating, setScCreating] = useState(false);
+  const [scEditId, setScEditId] = useState<number | null>(null);
+  const [scEditCode, setScEditCode] = useState("");
+  const [scEditSaving, setScEditSaving] = useState(false);
+  const [scDeletingId, setScDeletingId] = useState<number | null>(null);
 
   // Listing search / sort
   const [search, setSearch] = useState("");
@@ -56,7 +77,6 @@ function InvoicesPageContent() {
   const [editSelectedIds, setEditSelectedIds] = useState<number[]>([]);
   const [editTitle, setEditTitle] = useState("");
   const [editSaving, setEditSaving] = useState(false);
-  const [editError, setEditError] = useState<string | null>(null);
 
   // ── Data loading ────────────────────────────────────────────────────────────
 
@@ -64,17 +84,47 @@ function InvoicesPageContent() {
     try {
       setCustomers(await apiGet<CustomerRow[]>("/customers"));
     } catch (e) {
-      setLoadError(e instanceof Error ? e.message : "Failed to load customers");
+      pushToast(e instanceof Error ? e.message : "Failed to load customers");
     }
-  }, []);
+  }, [pushToast]);
+
+  const loadCustomerTypes = useCallback(async () => {
+    setCtLoading(true);
+    try {
+      setCustomerTypes(await apiGet<CustomerTypeRow[]>("/customer-types"));
+    } catch (e) {
+      pushToast(e instanceof Error ? e.message : "Failed to load customer types");
+    } finally {
+      setCtLoading(false);
+    }
+  }, [pushToast]);
+
+  useEffect(() => {
+    if (activeTab === "customer_type") void loadCustomerTypes();
+  }, [activeTab, loadCustomerTypes]);
+
+  const loadServiceCodes = useCallback(async () => {
+    setScLoading(true);
+    try {
+      setServiceCodes(await apiGet<ServiceCodeRow[]>("/service-codes"));
+    } catch (e) {
+      pushToast(e instanceof Error ? e.message : "Failed to load service codes");
+    } finally {
+      setScLoading(false);
+    }
+  }, [pushToast]);
+
+  useEffect(() => {
+    if (activeTab === "service_code") void loadServiceCodes();
+  }, [activeTab, loadServiceCodes]);
 
   const loadInvoices = useCallback(async () => {
     try {
       setInvoices(await apiGet<InvoiceRow[]>("/invoices"));
     } catch (e) {
-      setLoadError(e instanceof Error ? e.message : "Failed to load invoices");
+      pushToast(e instanceof Error ? e.message : "Failed to load invoices");
     }
-  }, []);
+  }, [pushToast]);
 
   useEffect(() => {
     void loadCustomers();
@@ -108,7 +158,7 @@ function InvoicesPageContent() {
         }
       })
       .catch((e) => {
-        if (!cancelled) setLoadError(e instanceof Error ? e.message : "Failed to load centers");
+        if (!cancelled) pushToast(e instanceof Error ? e.message : "Failed to load centers");
       })
       .finally(() => { if (!cancelled) setCentersLoading(false); });
     return () => { cancelled = true; };
@@ -137,15 +187,14 @@ function InvoicesPageContent() {
     if (!editInvoice) return;
     setEditTitle(editInvoice.title ?? "");
     setEditSelectedIds(editInvoice.center_ids);
-    setEditError(null);
     let cancelled = false;
     setEditCentersLoading(true);
     void apiGet<CenterRow[]>(`/customers/${editInvoice.company_id}/centers`)
       .then((rows) => { if (!cancelled) setEditCenters(rows); })
-      .catch((e) => { if (!cancelled) setEditError(e instanceof Error ? e.message : "Failed to load centers"); })
+      .catch((e) => { if (!cancelled) pushToast(e instanceof Error ? e.message : "Failed to load centers"); })
       .finally(() => { if (!cancelled) setEditCentersLoading(false); });
     return () => { cancelled = true; };
-  }, [editInvoice]);
+  }, [editInvoice, pushToast]);
 
   // ── Derived ─────────────────────────────────────────────────────────────────
 
@@ -219,12 +268,11 @@ function InvoicesPageContent() {
   const onDeleteGrouping = async (id: number) => {
     if (!window.confirm("Remove this invoice grouping? Centers become available for new groupings.")) return;
     setDeletingId(id);
-    setLoadError(null);
     try {
       await apiDelete(`/invoices/${id}`);
       await loadInvoices();
     } catch (err) {
-      setLoadError(err instanceof Error ? err.message : "Failed to delete");
+      pushToast(err instanceof Error ? err.message : "Failed to delete grouping");
     } finally {
       setDeletingId(null);
     }
@@ -234,7 +282,6 @@ function InvoicesPageContent() {
     e.preventDefault();
     if (companyId === "" || selectedCenterIds.length === 0) return;
     setSaving(true);
-    setLoadError(null);
     try {
       await apiPost<InvoiceRow>("/invoices", {
         company_id: companyId,
@@ -246,7 +293,7 @@ function InvoicesPageContent() {
       await loadInvoices();
       setActiveTab("listing");
     } catch (err) {
-      setLoadError(err instanceof Error ? err.message : "Failed to create invoice");
+      pushToast(err instanceof Error ? err.message : "Failed to create invoice");
     } finally {
       setSaving(false);
     }
@@ -261,7 +308,6 @@ function InvoicesPageContent() {
     e.preventDefault();
     if (!editInvoice || editSelectedIds.length === 0) return;
     setEditSaving(true);
-    setEditError(null);
     try {
       await apiPatch<InvoiceRow>(`/invoices/${editInvoice.id}`, {
         center_ids: editSelectedIds,
@@ -270,9 +316,123 @@ function InvoicesPageContent() {
       setEditInvoice(null);
       await loadInvoices();
     } catch (err) {
-      setEditError(err instanceof Error ? err.message : "Failed to update grouping");
+      pushToast(err instanceof Error ? err.message : "Failed to update grouping");
     } finally {
       setEditSaving(false);
+    }
+  };
+
+  // ── Customer Type actions ────────────────────────────────────────────────────
+
+  const onCreateCustomerType = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const name = ctNewName.trim();
+    if (!name) return;
+    setCtCreating(true);
+    try {
+      await apiPost<CustomerTypeRow>("/customer-types", { name });
+      setCtNewName("");
+      await loadCustomerTypes();
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : "Failed to create customer type");
+    } finally {
+      setCtCreating(false);
+    }
+  };
+
+  const onSaveCtEdit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (ctEditId === null) return;
+    const name = ctEditName.trim();
+    if (!name) return;
+    setCtEditSaving(true);
+    try {
+      await apiPatch<CustomerTypeRow>(`/customer-types/${ctEditId}`, { name });
+      setCtEditId(null);
+      await loadCustomerTypes();
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : "Failed to update customer type");
+    } finally {
+      setCtEditSaving(false);
+    }
+  };
+
+  const onToggleCtStatus = async (ct: CustomerTypeRow) => {
+    try {
+      await apiPatch<CustomerTypeRow>(`/customer-types/${ct.id}`, { status: !ct.status });
+      await loadCustomerTypes();
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : "Failed to update status");
+    }
+  };
+
+  const onDeleteCustomerType = async (id: number) => {
+    if (!window.confirm("Delete this customer type? This cannot be undone.")) return;
+    setCtDeletingId(id);
+    try {
+      await apiDelete(`/customer-types/${id}`);
+      await loadCustomerTypes();
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : "Failed to delete customer type");
+    } finally {
+      setCtDeletingId(null);
+    }
+  };
+
+  // ── Service Code actions ─────────────────────────────────────────────────────
+
+  const onCreateServiceCode = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const code = scNewCode.trim();
+    if (!code) return;
+    setScCreating(true);
+    try {
+      await apiPost<ServiceCodeRow>("/service-codes", { code });
+      setScNewCode("");
+      await loadServiceCodes();
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : "Failed to create service code");
+    } finally {
+      setScCreating(false);
+    }
+  };
+
+  const onSaveScEdit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (scEditId === null) return;
+    const code = scEditCode.trim();
+    if (!code) return;
+    setScEditSaving(true);
+    try {
+      await apiPatch<ServiceCodeRow>(`/service-codes/${scEditId}`, { code });
+      setScEditId(null);
+      await loadServiceCodes();
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : "Failed to update service code");
+    } finally {
+      setScEditSaving(false);
+    }
+  };
+
+  const onToggleScStatus = async (sc: ServiceCodeRow) => {
+    try {
+      await apiPatch<ServiceCodeRow>(`/service-codes/${sc.id}`, { status: !sc.status });
+      await loadServiceCodes();
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : "Failed to update status");
+    }
+  };
+
+  const onDeleteServiceCode = async (id: number) => {
+    if (!window.confirm("Delete this service code? This cannot be undone.")) return;
+    setScDeletingId(id);
+    try {
+      await apiDelete(`/service-codes/${id}`);
+      await loadServiceCodes();
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : "Failed to delete service code");
+    } finally {
+      setScDeletingId(null);
     }
   };
 
@@ -282,6 +442,7 @@ function InvoicesPageContent() {
 
   return (
     <div className="max-w-5xl mx-auto animate-fadeInUp">
+      <ToastContainer toasts={toasts} onDismiss={dismissToast} />
 
       {/* ── Edit modal ── */}
       {editInvoice && (
@@ -301,7 +462,6 @@ function InvoicesPageContent() {
             </div>
 
             <form onSubmit={(e) => void onSaveEdit(e)} className="p-6 space-y-5">
-              {editError && <p className="text-rose-400 text-xs">{editError}</p>}
 
               {/* Centers */}
               <div>
@@ -376,16 +536,15 @@ function InvoicesPageContent() {
 
       {/* Page header */}
       <div className="mb-6">
-        <h1 className="text-2xl font-bold text-white tracking-tight">Invoices</h1>
+        <h1 className="text-2xl font-bold text-white tracking-tight">Configuration</h1>
         <p className="text-slate-500 text-sm mt-1">
-          Group centers per customer for invoice generation. Each center can only belong to one grouping per customer.
+          Manage invoice groupings and customer type classifications.
         </p>
-        {loadError && <p className="text-rose-400 text-xs mt-2">{loadError}</p>}
       </div>
 
       {/* Tabs */}
       <div className="flex gap-1 mb-6 p-1 rounded-xl border border-white/[0.07] w-fit" style={{ background: "var(--bg-card)" }}>
-        {(["grouping", "listing"] as const).map((tab) => (
+        {(["grouping", "listing", "customer_type", "service_code"] as const).map((tab) => (
           <button
             key={tab}
             type="button"
@@ -396,7 +555,13 @@ function InvoicesPageContent() {
                 : "text-slate-400 hover:text-white"
             }`}
           >
-            {tab === "grouping" ? "New Grouping" : `Saved Groupings${invoices.length ? ` (${invoices.length})` : ""}`}
+            {tab === "grouping"
+              ? "New Grouping"
+              : tab === "listing"
+              ? `Saved Groupings${invoices.length ? ` (${invoices.length})` : ""}`
+              : tab === "customer_type"
+              ? "Customer Type"
+              : "Service Code"}
           </button>
         ))}
       </div>
@@ -506,6 +671,309 @@ function InvoicesPageContent() {
             {saving ? "Saving…" : "Save invoice grouping"}
           </button>
         </form>
+      )}
+
+      {/* ── Customer Type tab ── */}
+      {activeTab === "customer_type" && (
+        <div className="space-y-6 max-w-2xl">
+          {/* Add new type form */}
+          <form
+            onSubmit={(e) => void onCreateCustomerType(e)}
+            className="rounded-2xl border border-white/[0.07] p-5 space-y-4"
+            style={{ background: "var(--bg-card)" }}
+          >
+            <h2 className="text-sm font-semibold text-white">Add customer type</h2>
+            <div className="flex gap-3">
+              <input
+                className={`${fieldCls()} flex-1`}
+                placeholder="e.g. Gold, Silver, Enterprise…"
+                value={ctNewName}
+                onChange={(e) => setCtNewName(e.target.value)}
+                maxLength={255}
+              />
+              <button
+                type="submit"
+                disabled={ctCreating || !ctNewName.trim()}
+                className="shimmer-btn px-5 py-2 rounded-xl text-white text-sm font-semibold disabled:opacity-50 shrink-0"
+              >
+                {ctCreating ? "Adding…" : "Add"}
+              </button>
+            </div>
+          </form>
+
+          {/* List */}
+          <div className="rounded-2xl border border-white/[0.07] overflow-hidden" style={{ background: "var(--bg-card)" }}>
+            {/* Header */}
+            <div className="grid grid-cols-[minmax(0,1fr)_6rem_7rem] px-5 py-3 border-b border-white/[0.06]">
+              <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">Name</span>
+              <span className="text-xs font-semibold uppercase tracking-wider text-slate-500 text-center">Status</span>
+              <span className="text-xs font-semibold uppercase tracking-wider text-slate-500 text-center">Actions</span>
+            </div>
+
+            {ctLoading && (
+              <p className="px-5 py-8 text-center text-slate-500 text-sm">Loading…</p>
+            )}
+
+            {!ctLoading && customerTypes.length === 0 && (
+              <p className="px-5 py-8 text-center text-slate-500 text-sm">
+                No customer types yet. Add one above.
+              </p>
+            )}
+
+            {!ctLoading && customerTypes.length > 0 && (
+              <ul className="divide-y divide-white/[0.04]">
+                {customerTypes.map((ct) => (
+                  <li
+                    key={ct.id}
+                    className="grid grid-cols-[minmax(0,1fr)_6rem_7rem] items-center px-5 py-3.5"
+                  >
+                    {/* Name / inline edit */}
+                    <div className="pr-4 min-w-0">
+                      {ctEditId === ct.id ? (
+                        <form onSubmit={(e) => void onSaveCtEdit(e)} className="flex gap-2">
+                          <input
+                            autoFocus
+                            className="flex-1 rounded-lg bg-[#1a1d2e] border border-white/[0.08] px-2 py-1 text-sm text-white focus:outline-none focus:ring-2 focus:ring-indigo-500/40"
+                            value={ctEditName}
+                            onChange={(e) => setCtEditName(e.target.value)}
+                            maxLength={255}
+                          />
+                          <button
+                            type="submit"
+                            disabled={ctEditSaving || !ctEditName.trim()}
+                            className="text-xs text-indigo-400 hover:text-indigo-300 font-semibold disabled:opacity-50"
+                          >
+                            {ctEditSaving ? "…" : "Save"}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setCtEditId(null)}
+                            className="text-xs text-slate-500 hover:text-white"
+                          >
+                            Cancel
+                          </button>
+                        </form>
+                      ) : (
+                        <span className={`text-sm font-medium ${ct.status ? "text-white" : "text-slate-500 line-through"}`}>
+                          {ct.name}
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Status toggle */}
+                    <div className="flex justify-center">
+                      <button
+                        type="button"
+                        title={ct.status ? "Deactivate" : "Activate"}
+                        onClick={() => void onToggleCtStatus(ct)}
+                        className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-semibold transition-colors ${
+                          ct.status
+                            ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 hover:bg-emerald-500/20"
+                            : "bg-slate-700/40 text-slate-500 border border-white/[0.06] hover:bg-slate-700/60"
+                        }`}
+                      >
+                        <span className={`w-1.5 h-1.5 rounded-full ${ct.status ? "bg-emerald-400" : "bg-slate-500"}`} />
+                        {ct.status ? "Active" : "Inactive"}
+                      </button>
+                    </div>
+
+                    {/* Actions */}
+                    <div className="flex items-center justify-center gap-1">
+                      <button
+                        type="button"
+                        title="Edit name"
+                        onClick={() => { setCtEditId(ct.id); setCtEditName(ct.name); }}
+                        disabled={ctEditId !== null}
+                        className="p-1.5 rounded-lg text-slate-500 hover:text-indigo-400 hover:bg-indigo-500/10 transition-colors disabled:opacity-30"
+                      >
+                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931z" />
+                        </svg>
+                      </button>
+                      <button
+                        type="button"
+                        title="Delete"
+                        disabled={ctDeletingId === ct.id}
+                        onClick={() => void onDeleteCustomerType(ct.id)}
+                        className="p-1.5 rounded-lg text-slate-600 hover:text-red-400 hover:bg-red-500/10 transition-colors disabled:opacity-50"
+                      >
+                        {ctDeletingId === ct.id ? (
+                          <svg className="w-3.5 h-3.5 animate-spin" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                            <path strokeLinecap="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9" />
+                          </svg>
+                        ) : (
+                          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                          </svg>
+                        )}
+                      </button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+
+            {customerTypes.length > 0 && (
+              <div className="px-5 py-3 border-t border-white/[0.06]">
+                <span className="text-slate-600 text-xs">
+                  {customerTypes.length} type{customerTypes.length !== 1 ? "s" : ""} ·{" "}
+                  {customerTypes.filter((ct) => ct.status).length} active
+                </span>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── Service Code tab ── */}
+      {activeTab === "service_code" && (
+        <div className="space-y-6 max-w-2xl">
+          {/* Add new code form */}
+          <form
+            onSubmit={(e) => void onCreateServiceCode(e)}
+            className="rounded-2xl border border-white/[0.07] p-5 space-y-4"
+            style={{ background: "var(--bg-card)" }}
+          >
+            <h2 className="text-sm font-semibold text-white">Add service code</h2>
+            <div className="flex gap-3">
+              <input
+                className={`${fieldCls()} flex-1`}
+                placeholder="e.g. SC-001, HORT-A…"
+                value={scNewCode}
+                onChange={(e) => setScNewCode(e.target.value)}
+                maxLength={255}
+              />
+              <button
+                type="submit"
+                disabled={scCreating || !scNewCode.trim()}
+                className="shimmer-btn px-5 py-2 rounded-xl text-white text-sm font-semibold disabled:opacity-50 shrink-0"
+              >
+                {scCreating ? "Adding…" : "Add"}
+              </button>
+            </div>
+          </form>
+
+          {/* List */}
+          <div className="rounded-2xl border border-white/[0.07] overflow-hidden" style={{ background: "var(--bg-card)" }}>
+            <div className="grid grid-cols-[minmax(0,1fr)_6rem_7rem] px-5 py-3 border-b border-white/[0.06]">
+              <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">Code</span>
+              <span className="text-xs font-semibold uppercase tracking-wider text-slate-500 text-center">Status</span>
+              <span className="text-xs font-semibold uppercase tracking-wider text-slate-500 text-center">Actions</span>
+            </div>
+
+            {scLoading && (
+              <p className="px-5 py-8 text-center text-slate-500 text-sm">Loading…</p>
+            )}
+
+            {!scLoading && serviceCodes.length === 0 && (
+              <p className="px-5 py-8 text-center text-slate-500 text-sm">
+                No service codes yet. Add one above.
+              </p>
+            )}
+
+            {!scLoading && serviceCodes.length > 0 && (
+              <ul className="divide-y divide-white/[0.04]">
+                {serviceCodes.map((sc) => (
+                  <li
+                    key={sc.id}
+                    className="grid grid-cols-[minmax(0,1fr)_6rem_7rem] items-center px-5 py-3.5"
+                  >
+                    {/* Code / inline edit */}
+                    <div className="pr-4 min-w-0">
+                      {scEditId === sc.id ? (
+                        <form onSubmit={(e) => void onSaveScEdit(e)} className="flex gap-2">
+                          <input
+                            autoFocus
+                            className="flex-1 rounded-lg bg-[#1a1d2e] border border-white/[0.08] px-2 py-1 text-sm text-white focus:outline-none focus:ring-2 focus:ring-indigo-500/40"
+                            value={scEditCode}
+                            onChange={(e) => setScEditCode(e.target.value)}
+                            maxLength={255}
+                          />
+                          <button
+                            type="submit"
+                            disabled={scEditSaving || !scEditCode.trim()}
+                            className="text-xs text-indigo-400 hover:text-indigo-300 font-semibold disabled:opacity-50"
+                          >
+                            {scEditSaving ? "…" : "Save"}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setScEditId(null)}
+                            className="text-xs text-slate-500 hover:text-white"
+                          >
+                            Cancel
+                          </button>
+                        </form>
+                      ) : (
+                        <span className={`text-sm font-medium font-mono ${sc.status ? "text-white" : "text-slate-500 line-through"}`}>
+                          {sc.code}
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Status toggle */}
+                    <div className="flex justify-center">
+                      <button
+                        type="button"
+                        title={sc.status ? "Deactivate" : "Activate"}
+                        onClick={() => void onToggleScStatus(sc)}
+                        className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-semibold transition-colors ${
+                          sc.status
+                            ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 hover:bg-emerald-500/20"
+                            : "bg-slate-700/40 text-slate-500 border border-white/[0.06] hover:bg-slate-700/60"
+                        }`}
+                      >
+                        <span className={`w-1.5 h-1.5 rounded-full ${sc.status ? "bg-emerald-400" : "bg-slate-500"}`} />
+                        {sc.status ? "Active" : "Inactive"}
+                      </button>
+                    </div>
+
+                    {/* Actions */}
+                    <div className="flex items-center justify-center gap-1">
+                      <button
+                        type="button"
+                        title="Edit code"
+                        onClick={() => { setScEditId(sc.id); setScEditCode(sc.code); }}
+                        disabled={scEditId !== null}
+                        className="p-1.5 rounded-lg text-slate-500 hover:text-indigo-400 hover:bg-indigo-500/10 transition-colors disabled:opacity-30"
+                      >
+                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931z" />
+                        </svg>
+                      </button>
+                      <button
+                        type="button"
+                        title="Delete"
+                        disabled={scDeletingId === sc.id}
+                        onClick={() => void onDeleteServiceCode(sc.id)}
+                        className="p-1.5 rounded-lg text-slate-600 hover:text-red-400 hover:bg-red-500/10 transition-colors disabled:opacity-50"
+                      >
+                        {scDeletingId === sc.id ? (
+                          <svg className="w-3.5 h-3.5 animate-spin" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                            <path strokeLinecap="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9" />
+                          </svg>
+                        ) : (
+                          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                          </svg>
+                        )}
+                      </button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+
+            {serviceCodes.length > 0 && (
+              <div className="px-5 py-3 border-t border-white/[0.06]">
+                <span className="text-slate-600 text-xs">
+                  {serviceCodes.length} code{serviceCodes.length !== 1 ? "s" : ""} ·{" "}
+                  {serviceCodes.filter((sc) => sc.status).length} active
+                </span>
+              </div>
+            )}
+          </div>
+        </div>
       )}
 
       {/* ── Listing tab ── */}

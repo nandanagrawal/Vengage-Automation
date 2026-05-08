@@ -2,7 +2,7 @@
 
 import type { FormEvent, ReactNode } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { CenterRow, CustomerAttachmentRow, CustomerRow, ProductAndServiceRow } from "@/lib/api";
+import type { CenterRow, CustomerAttachmentRow, CustomerRow, CustomerTypeRow, ProductAndServiceRow, ServiceCodeRow } from "@/lib/api";
 import { apiDelete, apiDownloadBlob, apiGet, apiPatch, apiPost, downloadBlobAsFile } from "@/lib/api";
 
 type CenterLine = { key: string; id?: number; name: string };
@@ -13,6 +13,21 @@ function newCenterLine(): CenterLine {
       ? crypto.randomUUID()
       : `k-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   return { key, name: "" };
+}
+
+type ServiceRow = {
+  key: string;
+  product_and_service_id: number | "";
+  service_code_id: number | "";
+  rate: string;
+};
+
+function newServiceRow(): ServiceRow {
+  const key =
+    typeof crypto !== "undefined" && "randomUUID" in crypto
+      ? crypto.randomUUID()
+      : `sr-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  return { key, product_and_service_id: "", service_code_id: "", rate: "" };
 }
 
 export type CustomerFormValues = {
@@ -50,7 +65,6 @@ export type CustomerFormValues = {
   shipping_zip: string;
   shipping_country: string;
   notes: string;
-  rate: string;
   add_attachment_in_mail: boolean;
 };
 
@@ -64,7 +78,7 @@ const emptyForm = (): CustomerFormValues => ({
   ship_same_as_billing: true,
   shipping_line1: "", shipping_line2: "", shipping_line3: "", shipping_line4: "",
   shipping_city: "", shipping_state: "", shipping_zip: "", shipping_country: "",
-  notes: "", rate: "0", add_attachment_in_mail: false,
+  notes: "", add_attachment_in_mail: false,
 });
 
 function customerToForm(c: CustomerRow): CustomerFormValues {
@@ -103,7 +117,6 @@ function customerToForm(c: CustomerRow): CustomerFormValues {
     shipping_zip: c.shipping_zip ?? "",
     shipping_country: c.shipping_country ?? "",
     notes: c.notes ?? "",
-    rate: String(c.rate),
     add_attachment_in_mail: c.add_attachment_in_mail,
   };
 }
@@ -169,19 +182,38 @@ export function CustomerModal({
   const [centerLines, setCenterLines] = useState<CenterLine[]>([]);
   const [pendingDeleteIds, setPendingDeleteIds] = useState<number[]>([]);
   const [centersLoadError, setCentersLoadError] = useState<string | null>(null);
+
+  // Service rows
+  const [serviceRows, setServiceRows] = useState<ServiceRow[]>([]);
   const [productOptions, setProductOptions] = useState<ProductAndServiceRow[]>([]);
-  const [productsLoadError, setProductsLoadError] = useState<string | null>(null);
-  const [selectedProductIds, setSelectedProductIds] = useState<number[]>([]);
+  const [serviceCodeOptions, setServiceCodeOptions] = useState<ServiceCodeRow[]>([]);
+
+  // Customer Types
+  const [customerTypeOptions, setCustomerTypeOptions] = useState<CustomerTypeRow[]>([]);
+  const [selectedCustomerTypeIds, setSelectedCustomerTypeIds] = useState<number[]>([]);
+  const [newTypeName, setNewTypeName] = useState("");
+  const [creatingType, setCreatingType] = useState(false);
+  const [createTypeError, setCreateTypeError] = useState<string | null>(null);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!open) return;
     if (mode === "edit" && customer) {
       setForm(customerToForm(customer));
-      setSelectedProductIds(customer.product_and_service_ids ?? []);
+      setSelectedCustomerTypeIds(customer.customer_type_ids ?? []);
+      setServiceRows(
+        (customer.customer_services ?? []).map((cs) => ({
+          key: `cs-${cs.id}`,
+          product_and_service_id: cs.product_and_service_id,
+          service_code_id: cs.service_code_id,
+          rate: cs.rate,
+        })),
+      );
     } else {
       setForm(emptyForm());
-      setSelectedProductIds([]);
+      setSelectedCustomerTypeIds([]);
+      setServiceRows([]);
     }
     setFiles([]);
     setExistingAttachments([]);
@@ -189,12 +221,12 @@ export function CustomerModal({
     setCenterLines([]);
     setPendingDeleteIds([]);
     setCentersLoadError(null);
+    setNewTypeName("");
+    setCreateTypeError(null);
   }, [open, mode, customer]);
 
   useEffect(() => {
-    if (!open || mode !== "edit" || !customer?.id) {
-      return;
-    }
+    if (!open || mode !== "edit" || !customer?.id) return;
     let cancelled = false;
     setCentersLoadError(null);
     void apiGet<CenterRow[]>(`/customers/${customer.id}/centers`)
@@ -207,25 +239,22 @@ export function CustomerModal({
       .catch((e) => {
         if (!cancelled) setCentersLoadError(e instanceof Error ? e.message : "Failed to load centers");
       });
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [open, mode, customer?.id]);
 
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
-    setProductsLoadError(null);
     void apiGet<ProductAndServiceRow[]>("/product-and-services")
-      .then((rows) => {
-        if (!cancelled) setProductOptions(rows);
-      })
-      .catch((e) => {
-        if (!cancelled) setProductsLoadError(e instanceof Error ? e.message : "Failed to load products");
-      });
-    return () => {
-      cancelled = true;
-    };
+      .then((rows) => { if (!cancelled) setProductOptions(rows); })
+      .catch(() => { /* non-fatal */ });
+    void apiGet<ServiceCodeRow[]>("/service-codes")
+      .then((rows) => { if (!cancelled) setServiceCodeOptions(rows); })
+      .catch(() => { /* non-fatal */ });
+    void apiGet<CustomerTypeRow[]>("/customer-types")
+      .then((rows) => { if (!cancelled) setCustomerTypeOptions(rows); })
+      .catch(() => { /* non-fatal */ });
+    return () => { cancelled = true; };
   }, [open]);
 
   useEffect(() => {
@@ -239,18 +268,10 @@ export function CustomerModal({
     setAttachmentsLoading(true);
     setAttachmentsLoadError(null);
     void apiGet<CustomerAttachmentRow[]>(`/customers/${customer.id}/attachments`)
-      .then((rows) => {
-        if (!cancelled) setExistingAttachments(rows);
-      })
-      .catch((e) => {
-        if (!cancelled) setAttachmentsLoadError(e instanceof Error ? e.message : "Failed to load attachments");
-      })
-      .finally(() => {
-        if (!cancelled) setAttachmentsLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
+      .then((rows) => { if (!cancelled) setExistingAttachments(rows); })
+      .catch((e) => { if (!cancelled) setAttachmentsLoadError(e instanceof Error ? e.message : "Failed to load attachments"); })
+      .finally(() => { if (!cancelled) setAttachmentsLoading(false); });
+    return () => { cancelled = true; };
   }, [open, mode, customer?.id]);
 
   const displayPreview = useMemo(() => {
@@ -275,6 +296,20 @@ export function CustomerModal({
     setCenterLines((rows) => rows.filter((r) => r.key !== line.key));
   };
 
+  const updateServiceRow = (key: string, patch: Partial<ServiceRow>) => {
+    setServiceRows((rows) => rows.map((r) => (r.key === key ? { ...r, ...patch } : r)));
+  };
+
+  const removeServiceRow = (key: string) => {
+    setServiceRows((rows) => rows.filter((r) => r.key !== key));
+  };
+
+  // Products already selected in other rows (for duplicate prevention)
+  const usedProductIds = useMemo(
+    () => new Set(serviceRows.map((r) => r.product_and_service_id).filter((id) => id !== "")),
+    [serviceRows],
+  );
+
   const resetAndClose = () => {
     setForm(emptyForm());
     setFiles([]);
@@ -283,6 +318,10 @@ export function CustomerModal({
     setCenterLines([]);
     setPendingDeleteIds([]);
     setCentersLoadError(null);
+    setServiceRows([]);
+    setSelectedCustomerTypeIds([]);
+    setNewTypeName("");
+    setCreateTypeError(null);
     onClose();
   };
 
@@ -306,6 +345,14 @@ export function CustomerModal({
     };
     const hasShip = Object.values(shipping).some(Boolean);
 
+    const validServices = serviceRows
+      .filter((r) => r.product_and_service_id !== "" && r.service_code_id !== "" && parseFloat(r.rate) > 0)
+      .map((r) => ({
+        product_and_service_id: r.product_and_service_id as number,
+        service_code_id: r.service_code_id as number,
+        rate: r.rate,
+      }));
+
     const payload: Record<string, unknown> = {
       title: form.title || undefined,
       given_name: form.given_name || undefined,
@@ -327,9 +374,9 @@ export function CustomerModal({
       billing: hasBilling ? billing : undefined,
       shipping: !form.ship_same_as_billing && hasShip ? shipping : undefined,
       notes: form.notes || undefined,
-      rate: form.rate || "0",
       add_attachment_in_mail: form.add_attachment_in_mail,
-      product_and_service_ids: selectedProductIds,
+      customer_services: validServices,
+      customer_type_ids: selectedCustomerTypeIds,
     };
 
     try {
@@ -359,6 +406,9 @@ export function CustomerModal({
   };
 
   if (!open) return null;
+
+  const activeProducts = productOptions.filter((p) => p.active);
+  const activeServiceCodes = serviceCodeOptions.filter((sc) => sc.status);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-fadeInUp">
@@ -597,9 +647,7 @@ export function CustomerModal({
                                 `/customers/${customer.id}/attachments/${a.id}/file`,
                               );
                               downloadBlobAsFile(blob, a.original_filename);
-                            } catch {
-                              /* ignore */
-                            }
+                            } catch { /* ignore */ }
                           }}
                         >
                           Download
@@ -646,55 +694,221 @@ export function CustomerModal({
 
           {/* ── App fields ── */}
           <Section title="App fields" open={openExtra} onToggle={() => setOpenExtra(!openExtra)} icon={<span className="text-violet-400">⚙</span>}>
-            <div className="mb-4">
-              <label className={labelCls()}>Products &amp; services (this app only)</label>
+
+            {/* Services table */}
+            <div className="mb-5">
+              <label className={labelCls()}>Services &amp; rates</label>
               <p className="text-[11px] text-slate-600 mb-2">
-                Linked from QuickBooks Items after Sync. Not sent to QuickBooks on the customer record.
+                Select a product/service, set the rate, and pick a service code. Rate must be &gt; 0. Each service can only appear once.
               </p>
-              {productsLoadError && <p className="text-xs text-rose-400 mb-2">{productsLoadError}</p>}
-              {productOptions.length === 0 && !productsLoadError && (
-                <p className="text-xs text-slate-600 py-1">No items yet — run Sync to pull from QuickBooks.</p>
-              )}
-              {productOptions.length > 0 && (
-                <div className="max-h-40 overflow-y-auto rounded-lg border border-white/[0.08] bg-white/[0.02] px-3 py-2 space-y-1.5">
-                  {productOptions.map((p) => (
-                    <label key={p.id} className="flex items-center gap-2.5 cursor-pointer text-sm text-slate-300">
-                      <input
-                        type="checkbox"
-                        className="rounded border-white/20"
-                        checked={selectedProductIds.includes(p.id)}
-                        onChange={(e) => {
-                          setSelectedProductIds((prev) =>
-                            e.target.checked ? [...prev, p.id] : prev.filter((id) => id !== p.id),
-                          );
-                        }}
-                      />
-                      <span className="truncate">{p.name}</span>
-                      {p.sku ? <span className="text-xs text-slate-600 shrink-0">({p.sku})</span> : null}
-                    </label>
-                  ))}
+
+              {serviceRows.length > 0 && (
+                <div className="rounded-lg border border-white/[0.08] bg-white/[0.02] overflow-hidden mb-2">
+                  {/* Header */}
+                  <div className="grid grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1.5fr)_2rem] gap-2 px-3 py-2 border-b border-white/[0.06]">
+                    <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Service</span>
+                    <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Rate</span>
+                    <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Service Code</span>
+                    <span />
+                  </div>
+                  <div className="divide-y divide-white/[0.04]">
+                    {serviceRows.map((row) => (
+                      <div key={row.key} className="grid grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1.5fr)_2rem] gap-2 px-3 py-2 items-center">
+                        {/* Product dropdown */}
+                        <select
+                          value={row.product_and_service_id === "" ? "" : String(row.product_and_service_id)}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            updateServiceRow(row.key, { product_and_service_id: v === "" ? "" : Number(v) });
+                          }}
+                          className="rounded-lg bg-[#1a1d2e] border border-white/[0.08] px-2 py-1.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-indigo-500/40 appearance-none"
+                        >
+                          <option value="" style={{ background: "#1a1d2e", color: "#94a3b8" }}>Select…</option>
+                          {activeProducts.map((p) => {
+                            const isUsedElsewhere = usedProductIds.has(p.id) && row.product_and_service_id !== p.id;
+                            return (
+                              <option
+                                key={p.id}
+                                value={p.id}
+                                disabled={isUsedElsewhere}
+                                style={{ background: "#1a1d2e", color: isUsedElsewhere ? "#64748b" : "#f1f5f9" }}
+                              >
+                                {p.name}
+                              </option>
+                            );
+                          })}
+                        </select>
+
+                        {/* Rate */}
+                        <input
+                          type="number"
+                          min="0.0001"
+                          step="0.0001"
+                          placeholder="0.00"
+                          value={row.rate}
+                          onChange={(e) => updateServiceRow(row.key, { rate: e.target.value })}
+                          className="rounded-lg bg-[#1a1d2e] border border-white/[0.08] px-2 py-1.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-indigo-500/40"
+                        />
+
+                        {/* Service code dropdown */}
+                        <select
+                          value={row.service_code_id === "" ? "" : String(row.service_code_id)}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            updateServiceRow(row.key, { service_code_id: v === "" ? "" : Number(v) });
+                          }}
+                          className="rounded-lg bg-[#1a1d2e] border border-white/[0.08] px-2 py-1.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-indigo-500/40 appearance-none"
+                        >
+                          <option value="" style={{ background: "#1a1d2e", color: "#94a3b8" }}>Select…</option>
+                          {activeServiceCodes.map((sc) => (
+                            <option key={sc.id} value={sc.id} style={{ background: "#1a1d2e", color: "#f1f5f9" }}>
+                              {sc.code}
+                            </option>
+                          ))}
+                        </select>
+
+                        {/* Remove */}
+                        <button
+                          type="button"
+                          onClick={() => removeServiceRow(row.key)}
+                          className="text-slate-600 hover:text-red-400 text-sm transition-colors"
+                          aria-label="Remove service row"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               )}
+
+              <button
+                type="button"
+                className="text-sm font-semibold text-indigo-400 hover:text-indigo-300"
+                onClick={() => setServiceRows((rows) => [...rows, newServiceRow()])}
+              >
+                + Add service
+              </button>
+
+              {activeProducts.length === 0 && (
+                <p className="text-[11px] text-amber-400/80 mt-1.5">No active products found — run Sync to pull from QuickBooks.</p>
+              )}
+              {activeServiceCodes.length === 0 && (
+                <p className="text-[11px] text-amber-400/80 mt-1">No active service codes — add them in Configuration → Service Code.</p>
+              )}
             </div>
-            <div className="grid md:grid-cols-2 gap-4 items-start">
-              <div>
-                <label className={labelCls()}>Rate</label>
-                <input type="number" min={0} step="0.0001" className={fieldCls()} value={form.rate} onChange={(e) => update("rate", e.target.value)} />
-                <p className="text-[11px] text-slate-600 mt-1">Decimal, minimum 0, no maximum.</p>
-              </div>
-              <div>
-                <label className={labelCls()}>Mail attachment</label>
-                <label className="flex items-center gap-2.5 cursor-pointer mt-2">
-                  <div
-                    className={`relative w-10 h-5 rounded-full transition-colors ${form.add_attachment_in_mail ? "bg-indigo-600" : "bg-white/10"}`}
-                    onClick={() => update("add_attachment_in_mail", !form.add_attachment_in_mail)}
-                  >
-                    <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform ${form.add_attachment_in_mail ? "translate-x-5" : "translate-x-0"}`} />
-                  </div>
-                  <span className="text-sm text-slate-300">Add attachment in mail</span>
-                </label>
-                <p className="text-[11px] text-slate-600 mt-1.5">Auto-attach Excel/PDF when sending invoices.</p>
-              </div>
+
+            {/* Customer Types */}
+            <div className="mb-4">
+              <label className={labelCls()}>Customer types</label>
+              {createTypeError && <p className="text-xs text-rose-400 mb-1">{createTypeError}</p>}
+              {(() => {
+                const assignedIds = new Set(selectedCustomerTypeIds);
+                const visibleTypes = mode === "edit"
+                  ? customerTypeOptions.filter((ct) => ct.status || assignedIds.has(ct.id))
+                  : customerTypeOptions.filter((ct) => ct.status);
+                return (
+                  <>
+                    {visibleTypes.length === 0 && (
+                      <p className="text-xs text-slate-600 py-1">No active customer types. Create one below.</p>
+                    )}
+                    {visibleTypes.length > 0 && (
+                      <div className="max-h-36 overflow-y-auto rounded-lg border border-white/[0.08] bg-white/[0.02] px-3 py-2 space-y-1.5 mb-2">
+                        {visibleTypes.map((ct) => (
+                          <label
+                            key={ct.id}
+                            className={`flex items-center gap-2.5 text-sm ${ct.status ? "cursor-pointer text-slate-300" : "cursor-pointer text-slate-500"}`}
+                          >
+                            <input
+                              type="checkbox"
+                              className="rounded border-white/20"
+                              checked={selectedCustomerTypeIds.includes(ct.id)}
+                              onChange={(e) => {
+                                setSelectedCustomerTypeIds((prev) =>
+                                  e.target.checked ? [...prev, ct.id] : prev.filter((id) => id !== ct.id),
+                                );
+                              }}
+                            />
+                            <span className={ct.status ? "" : "line-through"}>{ct.name}</span>
+                            {!ct.status && (
+                              <span className="text-[9px] font-semibold uppercase tracking-wide text-slate-600 border border-white/[0.08] px-1 py-0.5 rounded">
+                                inactive
+                              </span>
+                            )}
+                          </label>
+                        ))}
+                      </div>
+                    )}
+                    {/* Inline create */}
+                    <div className="flex gap-2 items-center">
+                      <input
+                        className="flex-1 rounded-lg bg-white/[0.04] border border-white/[0.08] px-2 py-1.5 text-xs text-white placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-indigo-500/40"
+                        placeholder="New type name…"
+                        value={newTypeName}
+                        onChange={(e) => setNewTypeName(e.target.value)}
+                        onKeyDown={async (e) => {
+                          if (e.key !== "Enter") return;
+                          e.preventDefault();
+                          const name = newTypeName.trim();
+                          if (!name || creatingType) return;
+                          setCreatingType(true);
+                          setCreateTypeError(null);
+                          try {
+                            const created = await apiPost<CustomerTypeRow>("/customer-types", { name });
+                            setCustomerTypeOptions((prev) => [...prev, created].sort((a, b) => a.name.localeCompare(b.name)));
+                            setSelectedCustomerTypeIds((prev) => [...prev, created.id]);
+                            setNewTypeName("");
+                          } catch (err) {
+                            setCreateTypeError(err instanceof Error ? err.message : "Failed to create type");
+                          } finally {
+                            setCreatingType(false);
+                          }
+                        }}
+                        maxLength={255}
+                      />
+                      <button
+                        type="button"
+                        disabled={!newTypeName.trim() || creatingType}
+                        className="text-xs font-semibold text-indigo-400 hover:text-indigo-300 disabled:opacity-40 shrink-0"
+                        onClick={async () => {
+                          const name = newTypeName.trim();
+                          if (!name || creatingType) return;
+                          setCreatingType(true);
+                          setCreateTypeError(null);
+                          try {
+                            const created = await apiPost<CustomerTypeRow>("/customer-types", { name });
+                            setCustomerTypeOptions((prev) => [...prev, created].sort((a, b) => a.name.localeCompare(b.name)));
+                            setSelectedCustomerTypeIds((prev) => [...prev, created.id]);
+                            setNewTypeName("");
+                          } catch (err) {
+                            setCreateTypeError(err instanceof Error ? err.message : "Failed to create type");
+                          } finally {
+                            setCreatingType(false);
+                          }
+                        }}
+                      >
+                        {creatingType ? "Adding…" : "+ Add"}
+                      </button>
+                    </div>
+                    <p className="text-[10px] text-slate-700 mt-1">Press Enter or click + Add to create a new type inline.</p>
+                  </>
+                );
+              })()}
+            </div>
+
+            {/* Mail attachment toggle */}
+            <div>
+              <label className={labelCls()}>Mail attachment</label>
+              <label className="flex items-center gap-2.5 cursor-pointer mt-2">
+                <div
+                  className={`relative w-10 h-5 rounded-full transition-colors ${form.add_attachment_in_mail ? "bg-indigo-600" : "bg-white/10"}`}
+                  onClick={() => update("add_attachment_in_mail", !form.add_attachment_in_mail)}
+                >
+                  <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform ${form.add_attachment_in_mail ? "translate-x-5" : "translate-x-0"}`} />
+                </div>
+                <span className="text-sm text-slate-300">Add attachment in mail</span>
+              </label>
+              <p className="text-[11px] text-slate-600 mt-1.5">Auto-attach Excel/PDF when sending invoices.</p>
             </div>
           </Section>
 

@@ -17,8 +17,8 @@ The existing `invoices` table already holds center groupings for each customer.
 - Centers in a grouping → one combined QBO invoice (quantities summed).
 - Centers NOT in any grouping → one individual QBO invoice per center.
 
-Rate comes exclusively from ProductAndService.unit_price (synced from QBO).
-If unit_price is null or ≤ 0, the line item is skipped.
+Rate comes exclusively from CustomerProductAndService.rate (set per-customer, per-product).
+If rate is null or ≤ 0, the line item is skipped.
 """
 
 from __future__ import annotations
@@ -35,6 +35,7 @@ from sqlalchemy import func as sa_func
 
 from app.models.center import Center
 from app.models.customer import Customer
+from app.models.customer_product_and_service import CustomerProductAndService
 from app.models.generated_invoice import (
     GeneratedInvoice,
     GeneratedInvoiceCenter,
@@ -216,14 +217,15 @@ def _build_qbo_invoice_payload(
     customer: Customer,
     center_names: list[str],
     quantities_by_product_lower: dict[str, Decimal],
-    products: list[ProductAndService],
+    customer_services: list[CustomerProductAndService],
 ) -> tuple[dict[str, Any], Decimal, list[_LineItem]] | None:
     """Build QBO invoice JSON payload. Returns (payload, total_amount, line_items) or None."""
     line_items: list[_LineItem] = []
     total = Decimal("0")
 
-    for ps in products:
-        rate = ps.unit_price
+    for cs in customer_services:
+        ps = cs.product_and_service
+        rate = cs.rate
         if rate is None or rate <= 0:
             continue
         qty = quantities_by_product_lower.get(ps.name.lower(), Decimal("0"))
@@ -313,7 +315,9 @@ def generate_invoices(
     customers: list[Customer] = (
         db.query(Customer)
         .filter(Customer.id.in_(customer_ids))
-        .options(selectinload(Customer.product_and_services))
+        .options(
+            selectinload(Customer.customer_services).selectinload(CustomerProductAndService.product_and_service)
+        )
         .all()
     )
     customer_by_id: dict[int, Customer] = {c.id: c for c in customers}
@@ -362,12 +366,13 @@ def generate_invoices(
         if not customer_centers_in_file:
             continue
 
-        # Customer's selected products that also appear in the file
-        customer_products = [
-            ps for ps in customer.product_and_services
-            if ps.name.lower() in product_lower_to_model and ps.active
+        # Customer's service entries whose product appears in the file
+        customer_services_in_file = [
+            cs for cs in customer.customer_services
+            if cs.product_and_service.name.lower() in product_lower_to_model
+            and cs.product_and_service.active
         ]
-        if not customer_products:
+        if not customer_services_in_file:
             result.errors.append(
                 f"Customer '{customer.display_name}' has no matching product/service columns in the file — skipped."
             )
@@ -410,7 +415,7 @@ def generate_invoices(
                         center_names=[standalone_name],
                         center_by_name=center_by_name,
                         quantities=qty_map,
-                        products=customer_products,
+                        customer_services=customer_services_in_file,
                         result=result,
                         is_standalone=True,
                         invoice_upload_id=invoice_upload_id,
@@ -426,7 +431,7 @@ def generate_invoices(
                     center_names=group_center_names,
                     center_by_name=center_by_name,
                     quantities=combined,
-                    products=customer_products,
+                    customer_services=customer_services_in_file,
                     result=result,
                     is_standalone=False,
                     invoice_upload_id=invoice_upload_id,
@@ -444,7 +449,7 @@ def _create_and_send(
     center_names: list[str],
     center_by_name: dict[str, Center],
     quantities: dict[str, Decimal],
-    products: list[ProductAndService],
+    customer_services: list[CustomerProductAndService],
     result: GenerationResult,
     is_standalone: bool,
     invoice_upload_id: int | None = None,
@@ -454,7 +459,7 @@ def _create_and_send(
         if is_standalone
         else " + ".join(center_names)
     )
-    built = _build_qbo_invoice_payload(customer, center_names, quantities, products)
+    built = _build_qbo_invoice_payload(customer, center_names, quantities, customer_services)
     if built is None:
         result.errors.append(
             f"Customer '{customer.display_name}' / {label}: no line items with valid rate and non-zero quantity — invoice skipped."

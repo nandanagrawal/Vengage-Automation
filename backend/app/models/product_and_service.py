@@ -5,21 +5,10 @@ from __future__ import annotations
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Numeric, String, Table, Text, func
+from sqlalchemy import Boolean, DateTime, Numeric, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
-
-customer_product_and_services = Table(
-    "customer_product_and_services",
-    Base.metadata,
-    Column("customer_id", ForeignKey("customers.id", ondelete="CASCADE"), primary_key=True),
-    Column(
-        "product_and_service_id",
-        ForeignKey("product_and_services.id", ondelete="CASCADE"),
-        primary_key=True,
-    ),
-)
 
 
 class ProductAndService(Base):
@@ -60,8 +49,7 @@ class ProductAndService(Base):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
 
-    customers: Mapped[list["Customer"]] = relationship(
-        "Customer",
-        secondary=customer_product_and_services,
-        back_populates="product_and_services",
+    customer_services: Mapped[list["CustomerProductAndService"]] = relationship(
+        "CustomerProductAndService",
+        back_populates="product_and_service",
     )

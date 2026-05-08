@@ -17,6 +17,21 @@ class AddressMixin(BaseModel):
     country: str | None = None
 
 
+class CustomerServiceInput(BaseModel):
+    product_and_service_id: int
+    service_code_id: int
+    rate: Decimal = Field(..., gt=0, description="Must be greater than zero")
+
+
+class CustomerServiceResponse(BaseModel):
+    id: int
+    product_and_service_id: int
+    service_code_id: int
+    rate: Decimal
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class CustomerCreate(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -43,9 +58,9 @@ class CustomerCreate(BaseModel):
     shipping: AddressMixin | None = None
 
     notes: str | None = None
-    rate: Decimal = Field(default=Decimal("0"), ge=0)
     add_attachment_in_mail: bool = False
-    product_and_service_ids: list[int] | None = None
+    customer_services: list[CustomerServiceInput] | None = None
+    customer_type_ids: list[int] | None = None
 
 
 class CustomerUpdate(BaseModel):
@@ -74,9 +89,9 @@ class CustomerUpdate(BaseModel):
     shipping: AddressMixin | None = None
 
     notes: str | None = None
-    rate: Decimal | None = Field(None, ge=0)
     add_attachment_in_mail: bool | None = None
-    product_and_service_ids: list[int] | None = None
+    customer_services: list[CustomerServiceInput] | None = None
+    customer_type_ids: list[int] | None = None
 
 
 class CustomerResponse(BaseModel):
@@ -127,9 +142,9 @@ class CustomerResponse(BaseModel):
     shipping_country: str | None = None
 
     notes: str | None = None
-    rate: Decimal = Field(default=Decimal("0"))
     add_attachment_in_mail: bool = False
-    product_and_service_ids: list[int] = Field(default_factory=list)
+    customer_services: list[CustomerServiceResponse] = Field(default_factory=list)
+    customer_type_ids: list[int] = Field(default_factory=list)
 
     created_at: datetime
     updated_at: datetime
@@ -155,7 +170,18 @@ class SyncResult(BaseModel):
 def customer_response_from_row(row: Customer) -> CustomerResponse:
     base = CustomerResponse.model_validate(row, from_attributes=True)
     return base.model_copy(
-        update={"product_and_service_ids": [p.id for p in row.product_and_services]},
+        update={
+            "customer_services": [
+                CustomerServiceResponse(
+                    id=cs.id,
+                    product_and_service_id=cs.product_and_service_id,
+                    service_code_id=cs.service_code_id,
+                    rate=cs.rate,
+                )
+                for cs in row.customer_services
+            ],
+            "customer_type_ids": [ct.id for ct in row.customer_types],
+        },
     )
 
 

@@ -8,6 +8,7 @@ from app.api.deps import get_current_user, get_qbo_client, require_admin
 from app.db.session import get_db
 from app.models.customer import Customer, CustomerStatus
 from app.models.customer_attachment import CustomerAttachment
+from app.models.customer_type import CustomerType
 from app.models.user import User, UserRole
 from app.schemas.customer import (
     ApprovalAction,
@@ -34,7 +35,10 @@ router = APIRouter()
 def _get_customer_or_404(db: Session, customer_id: int) -> Customer:
     row = (
         db.query(Customer)
-        .options(selectinload(Customer.product_and_services))
+        .options(
+            selectinload(Customer.customer_services),
+            selectinload(Customer.customer_types),
+        )
         .filter(Customer.id == customer_id)
         .first()
     )
@@ -90,7 +94,10 @@ def list_customers(
 ):
     rows = (
         db.query(Customer)
-        .options(selectinload(Customer.product_and_services))
+        .options(
+            selectinload(Customer.customer_services),
+            selectinload(Customer.customer_types),
+        )
         .order_by(Customer.display_name)
         .all()
     )

@@ -121,6 +121,11 @@ class FakeQBO:
                 return inv
         return {"Id": invoice_id, "EmailStatus": "EmailSent"}
 
+    def attach_to_invoice(self, access_token, realm_id, invoice_id, filename, content_type, file_bytes) -> dict:
+        aid = f"inv-att-{self._next_attach_id}"
+        self._next_attach_id += 1
+        return {"Attachable": {"Id": aid, "FileName": filename}}
+
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 

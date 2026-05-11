@@ -608,6 +608,91 @@ def generate_invoices(
     return result
 
 
+def generate_attachment_xlsx(
+    customer: Customer,
+    center_names: list[str],
+    center_by_name: dict[str, Center],
+    parsed: ParsedFile,
+    line_items: list[_LineItem],
+    inv_date: date,
+    inv_number: str | None,
+) -> bytes:
+    """Build a 2-sheet XLSX for attaching to the customer's invoice email."""
+    try:
+        import openpyxl
+    except ImportError as exc:
+        raise RuntimeError("openpyxl is required for attachment generation.") from exc
+
+    wb = openpyxl.Workbook()
+
+    # ── Sheet 1: RAW Data-Imaging ──────────────────────────────────────────────
+    ws1 = wb.active
+    ws1.title = "RAW Data-Imaging"
+    ws1.append(["S.No.", "Center Name", "Center Prefix"] + list(parsed.metric_columns))
+    for cname in center_names:
+        name_lower = cname.lower()
+        metrics = parsed.rows.get(name_lower, {})
+        prefix = parsed.center_prefixes.get(name_lower, cname)
+        row: list[Any] = [cname, cname, prefix] + [
+            float(metrics.get(mc.lower(), Decimal("0")))
+            for mc in parsed.metric_columns
+        ]
+        ws1.append(row)
+
+    # ── Sheet 2: Invoice Data ──────────────────────────────────────────────────
+    ws2 = wb.create_sheet("Invoice Data")
+
+    due = _due_date(inv_date)
+    memo = _memo(inv_date)
+    month_label = _month_label(inv_date)
+
+    if inv_date.month == 1:
+        prev_month_date = date(inv_date.year - 1, 12, 1)
+    else:
+        prev_month_date = date(inv_date.year, inv_date.month - 1, 1)
+    prev_month_label = prev_month_date.strftime("%b%y").upper()
+
+    # Metadata rows
+    ws2.append(["System Last Invoice No", inv_number or ""])
+    ws2.append(["Invoice Date", inv_date])
+    ws2.append(["Memo", memo])
+    ws2.append(["Month", memo])
+    ws2.append(["SAAS : Olivia Core Booking", "B0001"])
+    ws2.append(["SAAS : Olivia Misc. Items (ex. call forwarding, additional SMS, direct calls)", "B0002"])
+    ws2.append(["SAAS : Ereferral Services", "B0003"])
+    ws2.append(["Olivia Implementation", "B0004"])
+    ws2.append(["Development Services", "B0005"])
+    ws2.append(["Preread Services", "B0006"])
+    ws2.append(["Previous Month", prev_month_label])
+    ws2.append([])
+    ws2.append([
+        "*InvoiceNo", "*Customer", "*InvoiceDate", "*DueDate", "Terms", "ServiceDate", "Memo",
+        "*Item(Product/Service)", "ItemDescription", "ItemQuantity", "ItemRate",
+        "*ItemAmount", "Item Tax Amount", "*Item Tax Code",
+    ])
+
+    first = True
+    for li in line_items:
+        tax_amount = round(float(li.amount) * 0.1, 10)
+        if first:
+            ws2.append([
+                inv_number or "", customer.display_name, inv_date, due, "Net 15", inv_date, memo,
+                li.product_name, li.description,
+                float(li.quantity), float(li.rate), float(li.amount), tax_amount, "GST",
+            ])
+            first = False
+        else:
+            ws2.append([
+                None, None, None, None, None, inv_date, None,
+                li.product_name, li.description,
+                float(li.quantity), float(li.rate), float(li.amount), tax_amount, "GST",
+            ])
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
 def _create_and_send(
     db: Session,
     qbo: SupportsQuickBooks,
@@ -683,6 +768,29 @@ def _create_and_send(
         if gen_inv is not None:
             gen_inv.quickbooks_invoice_id = inv_id
             gen_inv.invoice_number = inv_number
+
+        if customer.add_attachment_in_mail:
+            try:
+                xlsx_bytes = generate_attachment_xlsx(
+                    customer=customer,
+                    center_names=center_names,
+                    center_by_name=center_by_name,
+                    parsed=parsed,
+                    line_items=line_items,
+                    inv_date=inv_date,
+                    inv_number=inv_number,
+                )
+                safe_inv = (inv_number or inv_id).replace("/", "-")
+                qbo.attach_to_invoice(
+                    access_token=access_token,
+                    realm_id=realm_id,
+                    invoice_id=inv_id,
+                    filename=f"Invoice_{safe_inv}.xlsx",
+                    content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    file_bytes=xlsx_bytes,
+                )
+            except Exception as attach_err:
+                result.errors.append(f"Invoice {inv_id}: failed to attach XLS — {attach_err}")
 
         send_status = "failed"
         send_error: str | None = None

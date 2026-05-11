@@ -74,6 +74,16 @@ class SupportsQuickBooks(Protocol):
         email: str | None = None,
     ) -> dict[str, Any]: ...
 
+    def attach_to_invoice(
+        self,
+        access_token: str,
+        realm_id: str,
+        invoice_id: str,
+        filename: str,
+        content_type: str,
+        file_bytes: bytes,
+    ) -> dict[str, Any]: ...
+
 
 def _headers(access_token: str) -> dict[str, str]:
     return {
@@ -314,6 +324,57 @@ class QuickBooksClient:
                     response=res,
                 )
             return res.json().get("Invoice", {})
+
+
+    def attach_to_invoice(
+        self,
+        access_token: str,
+        realm_id: str,
+        invoice_id: str,
+        filename: str,
+        content_type: str,
+        file_bytes: bytes,
+    ) -> dict[str, Any]:
+        import json as _json
+        import time as _time
+
+        metadata = _json.dumps({
+            "AttachableRef": [
+                {"EntityRef": {"type": "Invoice", "value": invoice_id}, "IncludeOnSend": True}
+            ],
+            "ContentType": content_type,
+            "FileName": filename,
+        })
+        url = f"{self.base_url()}/v3/company/{realm_id}/upload?minorversion={self._minor()}"
+
+        last_err: Exception | None = None
+        for attempt in range(3):
+            if attempt:
+                _time.sleep(2 ** attempt)  # 2s, 4s
+            with httpx.Client(timeout=120.0) as client:
+                res = client.post(
+                    url,
+                    headers={"Authorization": f"Bearer {access_token}", "Accept": "application/json"},
+                    files={
+                        "file_metadata_01": ("attachment.json", metadata.encode(), "application/json"),
+                        "file_content_01": (filename, file_bytes, content_type),
+                    },
+                )
+            if res.is_success:
+                return res.json()
+            if res.status_code != 503:
+                raise httpx.HTTPStatusError(
+                    f"{res.status_code} from QBO attach_to_invoice({invoice_id}): {res.text}",
+                    request=res.request,
+                    response=res,
+                )
+            last_err = httpx.HTTPStatusError(
+                f"503 from QBO attach_to_invoice({invoice_id}) after {attempt + 1} attempt(s): {res.text}",
+                request=res.request,
+                response=res,
+            )
+
+        raise last_err  # type: ignore[misc]
 
 
 def phone_block(number: str | None) -> dict[str, str] | None:

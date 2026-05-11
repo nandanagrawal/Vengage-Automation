@@ -1,37 +1,58 @@
-"""Generate QBO invoices from an uploaded XLS/XLSX/CSV file.
+"""Generate QBO invoices from an uploaded RAW Data-Imaging XLSX/XLS/CSV file.
 
-File format
------------
-- Row 0  : header row
-- Col 0  : center name  (header label is irrelevant — always treated as center column)
-- Col 1+ : product/service names — any column whose header matches a synced
-           ProductAndService.name (case-insensitive) is treated as a quantity column.
-           Columns that don't match any product are silently ignored.
+New file format (RAW Data-Imaging sheet)
+-----------------------------------------
+Row 0   : header row — column names like "Confirmed Appointment (4)", etc.
+Col 0   : S.No. / Center ID  — matched case-insensitively against Center.name
+          in the database (e.g. "VNG-IMG-1-A").
+Col 1   : Center Name        — human-readable label, ignored for processing.
+Col 2   : Center Prefix      — may be comma-separated ("PAR, SMI-ALL"); the
+          first token before any comma is used in ItemDescription.
+Col 3+  : metric quantity columns
 
-Center matching is **case-insensitive** — rows whose center name does not match
-any Center.name in the database (ignoring case) are skipped (recorded in errors).
+Center matching
+---------------
+The value in col 0 is matched case-insensitively against Center.name in the
+database.  Rows whose col-0 value does not match any Center are skipped
+(recorded in errors).
+
+Product → column mapping
+------------------------
+PRODUCT_COLUMN_MAP maps each ProductAndService name (lower-case) to one or
+more column-header substrings.  The line-item quantity is the sum of all
+matching column values for that center's row.  Products whose name is in
+FIXED_QUANTITY_PRODUCTS always receive quantity = 1.
 
 Invoice grouping
 ----------------
-The existing `invoices` table already holds center groupings for each customer.
-- Centers in a grouping → one combined QBO invoice (quantities summed).
-- Centers NOT in any grouping → one individual QBO invoice per center.
+Existing Invoice groupings define which centers produce one combined invoice.
+Centers NOT in any grouping get one individual invoice each.
 
-Rate comes exclusively from CustomerProductAndService.rate (set per-customer, per-product).
-If rate is null or ≤ 0, the line item is skipped.
+Critically: grouped centers each produce their OWN set of line items inside
+the combined invoice (quantities are NOT summed across centers).
+
+Invoice fields
+--------------
+  TxnDate / ServiceDate : last calendar day of the current month
+  DueDate               : TxnDate + 15 days
+  Memo (CustomerMemo)   : "{MMMYY} Invoice"  e.g. "MAR26 Invoice"
+  Rate                  : CustomerProductAndService.rate  (per-customer, per-product)
+  ItemDescription       : "{center_prefix} - {MMMYY} Invoice month {service_code}"
+  0-quantity items      : included (amount = 0)
 """
 
 from __future__ import annotations
 
+import calendar
 import csv
 import io
 from dataclasses import dataclass, field
+from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from sqlalchemy.orm import Session, selectinload
-
 from sqlalchemy import func as sa_func
+from sqlalchemy.orm import Session, selectinload
 
 from app.models.center import Center
 from app.models.customer import Customer
@@ -46,56 +67,159 @@ from app.models.product_and_service import ProductAndService
 from app.services.qbo_client import SupportsQuickBooks
 
 
+# ── Product → metric-column mapping ──────────────────────────────────────────
+#
+# Keys   : ProductAndService.name lowercased (partial or full match via `in`)
+# Values : list of column-header substrings (lowercased); the quantity is the
+#          sum of all columns whose lowercased header contains one of these substrings.
+#
+# Multi-column entries (e.g. Call Forwarding) are summed together.
+
+PRODUCT_COLUMN_MAP: dict[str, list[str]] = {
+    "olivia ai bookings for imaging workflow": ["confirmed appointment (4)"],
+    "olivia ai - provisional bookings for imaging workflow": ["provisional appointment (5)"],
+    "direct calls handling charges": ["direct call (6)"],
+    "e-referral transmission charges": ["total e-referrals (11)"],
+    "e-referral manual sms charges": ["e-referral manual sms count (13)"],
+    "bookings via specialist portal": ["appointments (specialist) (15)"],
+    "e-referral greeting sms charges": ["e-referral greeting sms count (12)"],
+    "bookings directly done by customer team": ["appointments (operators) (14)"],
+    "misc item": ["sms count (chat) (16)"],
+    "e-referral portal monthly subscription fees": ["total e-referrals (11)"],
+    "call forwarding - telephony charges": [
+        "voice call forwarding bh (mins) (9)",
+        "voice call forwarding ooh (mins) (10)",
+    ],
+    "olivia ai - walkin services call handling": ["walkin (7)"],
+    "internal e-referral charges": ["total e-referrals (11)"],
+    "external e-referral charges": ["e-referral greeting sms count (12)"],
+    # Slab variants all source from Confirmed Appointment
+    "olivia ai bookings for imaging workflow  (slab-1)": ["confirmed appointment (4)"],
+    "olivia ai bookings for imaging workflow  (slab-2)": ["confirmed appointment (4)"],
+    "olivia ai bookings for imaging workflow  (slab-3)": ["confirmed appointment (4)"],
+}
+
+# Products that always have quantity = 1 regardless of file data
+FIXED_QUANTITY_PRODUCTS: frozenset[str] = frozenset({
+    "kiosk monthly usage and support charges",
+})
+
+
 # ── Parsing ───────────────────────────────────────────────────────────────────
 
 @dataclass
 class ParsedFile:
-    """First-column values → {product_col_name: quantity} for each data row."""
-    # {center_name: {product_name_lower: Decimal}}
+    """center_name_lower (col 0) → {col_header_lower: Decimal quantity}"""
     rows: dict[str, dict[str, Decimal]] = field(default_factory=dict)
-    # original casing of product column headers (as they appear in the file)
-    product_columns: list[str] = field(default_factory=list)
+    # original-case column headers (col 3+ only)
+    metric_columns: list[str] = field(default_factory=list)
+    # center_name_lower → first token of col 2 (used in line-item descriptions)
+    center_prefixes: dict[str, str] = field(default_factory=dict)
 
 
-def _to_decimal(value: Any) -> Decimal | None:
+def _to_decimal(value: Any) -> Decimal:
     if value is None or (isinstance(value, str) and not value.strip()):
         return Decimal("0")
     try:
         return Decimal(str(value).strip())
     except InvalidOperation:
-        return None
+        return Decimal("0")
 
 
-def _parse_rows(headers: list[str], data_rows: list[list[Any]]) -> ParsedFile:
-    if not headers:
-        raise ValueError("File has no columns.")
-    product_cols = headers[1:]  # everything after the center column
-    result = ParsedFile(product_columns=product_cols)
+def _extract_center_prefix(raw: Any) -> str:
+    """Return the first comma-token of a Center Prefix cell, stripped."""
+    text = str(raw).strip() if raw is not None else ""
+    return text.split(",")[0].strip()
+
+
+def _parse_raw_data_rows(
+    headers: list[str],
+    data_rows: list[list[Any]],
+) -> ParsedFile:
+    """Parse RAW Data-Imaging sheet.
+
+    Expects:
+      col 0 = Center ID / S.No.  → matched against Center.name in DB
+      col 1 = Center Name        → ignored
+      col 2 = Center Prefix      → first comma-token used in descriptions
+      col 3+ = metric columns
+    """
+    if len(headers) < 3:
+        raise ValueError("File must have at least 3 columns (S.No., Center Name, Center Prefix).")
+
+    metric_headers = headers[3:]  # col 3 onwards
+    result = ParsedFile(metric_columns=metric_headers)
 
     for row in data_rows:
-        if not row:
+        if not row or len(row) < 1:
             continue
         center_name = str(row[0]).strip() if row[0] is not None else ""
         if not center_name:
             continue
-        quantities: dict[str, Decimal] = {}
-        for i, col in enumerate(product_cols, start=1):
-            raw = row[i] if i < len(row) else None
-            qty = _to_decimal(raw)
-            if qty is None:
-                continue  # non-numeric → skip cell
-            lower_col = col.lower()
-            quantities[lower_col] = quantities.get(lower_col, Decimal("0")) + qty
 
-        # Sum rows with duplicate center names
-        if center_name in result.rows:
-            existing = result.rows[center_name]
-            for k, v in quantities.items():
+        center_name_lower = center_name.lower()
+        # col 2 first token is used for line-item descriptions (fallback: center_name)
+        desc_prefix = _extract_center_prefix(row[2]) if len(row) > 2 else ""
+        if not desc_prefix:
+            desc_prefix = center_name
+
+        metrics: dict[str, Decimal] = {}
+        for i, col_header in enumerate(metric_headers, start=3):
+            raw_val = row[i] if i < len(row) else None
+            metrics[col_header.lower()] = _to_decimal(raw_val)
+
+        # Accumulate if the same center appears on multiple rows
+        if center_name_lower in result.rows:
+            existing = result.rows[center_name_lower]
+            for k, v in metrics.items():
                 existing[k] = existing.get(k, Decimal("0")) + v
         else:
-            result.rows[center_name] = quantities
+            result.rows[center_name_lower] = metrics
+            result.center_prefixes[center_name_lower] = desc_prefix
 
     return result
+
+
+def _load_xlsx_sheet(content: bytes, sheet_name: str = "RAW Data-Imaging") -> tuple[list[str], list[list[Any]]]:
+    try:
+        import openpyxl
+    except ImportError as exc:
+        raise RuntimeError("openpyxl is required for .xlsx files.") from exc
+
+    wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True)
+    # Prefer the named sheet; fall back to active
+    ws = wb[sheet_name] if sheet_name in wb.sheetnames else wb.active
+    rows_raw = list(ws.iter_rows(values_only=True))
+    if not rows_raw:
+        raise ValueError("XLSX file is empty.")
+    headers = [str(h).strip() if h is not None else "" for h in rows_raw[0]]
+    return headers, [list(r) for r in rows_raw[1:]]
+
+
+def parse_xlsx(content: bytes) -> ParsedFile:
+    headers, data_rows = _load_xlsx_sheet(content)
+    return _parse_raw_data_rows(headers, data_rows)
+
+
+def parse_xls(content: bytes) -> ParsedFile:
+    try:
+        import xlrd
+    except ImportError as exc:
+        raise RuntimeError("xlrd is required for .xls files.") from exc
+
+    wb = xlrd.open_workbook(file_contents=content)
+    # Prefer "RAW Data-Imaging" sheet
+    sheet_names = [wb.sheet_by_index(i).name for i in range(wb.nsheets)]
+    idx = sheet_names.index("RAW Data-Imaging") if "RAW Data-Imaging" in sheet_names else 0
+    ws = wb.sheet_by_index(idx)
+    if ws.nrows == 0:
+        raise ValueError("XLS file is empty.")
+    headers = [str(ws.cell_value(0, c)).strip() for c in range(ws.ncols)]
+    data_rows = [
+        [ws.cell_value(r, c) for c in range(ws.ncols)]
+        for r in range(1, ws.nrows)
+    ]
+    return _parse_raw_data_rows(headers, data_rows)
 
 
 def parse_csv(content: bytes) -> ParsedFile:
@@ -105,40 +229,7 @@ def parse_csv(content: bytes) -> ParsedFile:
     if not rows:
         raise ValueError("CSV file is empty.")
     headers = [str(h).strip() for h in rows[0]]
-    return _parse_rows(headers, rows[1:])
-
-
-def parse_xlsx(content: bytes) -> ParsedFile:
-    try:
-        import openpyxl
-    except ImportError as exc:
-        raise RuntimeError("openpyxl is required for .xlsx files. Run: pip install openpyxl") from exc
-
-    wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True)
-    ws = wb.active
-    rows_raw = list(ws.iter_rows(values_only=True))
-    if not rows_raw:
-        raise ValueError("XLSX file is empty.")
-    headers = [str(h).strip() if h is not None else "" for h in rows_raw[0]]
-    return _parse_rows(headers, [list(r) for r in rows_raw[1:]])
-
-
-def parse_xls(content: bytes) -> ParsedFile:
-    try:
-        import xlrd
-    except ImportError as exc:
-        raise RuntimeError("xlrd is required for .xls files. Run: pip install xlrd") from exc
-
-    wb = xlrd.open_workbook(file_contents=content)
-    ws = wb.sheet_by_index(0)
-    if ws.nrows == 0:
-        raise ValueError("XLS file is empty.")
-    headers = [str(ws.cell_value(0, c)).strip() for c in range(ws.ncols)]
-    data_rows = [
-        [ws.cell_value(r, c) for c in range(ws.ncols)]
-        for r in range(1, ws.nrows)
-    ]
-    return _parse_rows(headers, data_rows)
+    return _parse_raw_data_rows(headers, rows[1:])
 
 
 def parse_spreadsheet(filename: str, content: bytes) -> ParsedFile:
@@ -154,12 +245,67 @@ def parse_spreadsheet(filename: str, content: bytes) -> ParsedFile:
     )
 
 
-# ── Generation ────────────────────────────────────────────────────────────────
+# ── Date helpers ──────────────────────────────────────────────────────────────
+
+def _invoice_date() -> date:
+    today = date.today()
+    last_day = calendar.monthrange(today.year, today.month)[1]
+    return date(today.year, today.month, last_day)
+
+
+def _due_date(inv_date: date) -> date:
+    return inv_date + timedelta(days=15)
+
+
+def _memo(inv_date: date) -> str:
+    return inv_date.strftime("%b%y").upper() + " Invoice"
+
+
+def _month_label(inv_date: date) -> str:
+    """e.g. MAR26"""
+    return inv_date.strftime("%b%y").upper()
+
+
+# ── Quantity lookup ───────────────────────────────────────────────────────────
+
+def _get_quantity(
+    product_name_lower: str,
+    center_metrics: dict[str, Decimal],
+) -> Decimal | None:
+    """Look up quantity for a product from a center's metric row.
+
+    Returns None if there is no mapping at all (product should be skipped).
+    Returns Decimal (possibly 0) when a mapping exists but has zero value.
+    """
+    if product_name_lower in FIXED_QUANTITY_PRODUCTS:
+        return Decimal("1")
+
+    col_substrings = PRODUCT_COLUMN_MAP.get(product_name_lower)
+    if col_substrings:
+        total = Decimal("0")
+        for substr in col_substrings:
+            for col_lower, val in center_metrics.items():
+                if substr in col_lower:
+                    total += val
+        return total
+
+    # Fallback: column header contains the product name as a substring.
+    # Allows custom/future products and test data to work without an explicit entry.
+    for col_lower, val in center_metrics.items():
+        if product_name_lower in col_lower:
+            return val
+
+    return None  # no mapping → line item skipped
+
+
+# ── Invoice generation ────────────────────────────────────────────────────────
 
 @dataclass
 class _LineItem:
     product_and_service_id: int | None
     product_name: str
+    center_prefix: str
+    description: str
     quantity: Decimal
     rate: Decimal
     amount: Decimal
@@ -169,11 +315,11 @@ class _LineItem:
 @dataclass
 class InvoiceDetail:
     customer_display_name: str
-    group_description: str      # e.g. "ac + acc" or "ad (standalone)"
+    group_description: str
     qbo_invoice_id: str
-    invoice_number: str | None  # DocNumber from QBO
+    invoice_number: str | None
     total_amount: float
-    send_status: str            # sent | failed | pending
+    send_status: str
 
     @property
     def sent(self) -> bool:
@@ -213,28 +359,31 @@ class GenerationResult:
         }
 
 
-def _build_qbo_invoice_payload(
-    customer: Customer,
-    center_names: list[str],
-    quantities_by_product_lower: dict[str, Decimal],
+def _build_line_items_for_center(
+    center_prefix: str,
+    center_metrics: dict[str, Decimal],
     customer_services: list[CustomerProductAndService],
-) -> tuple[dict[str, Any], Decimal, list[_LineItem]] | None:
-    """Build QBO invoice JSON payload. Returns (payload, total_amount, line_items) or None."""
-    line_items: list[_LineItem] = []
-    total = Decimal("0")
-
+    month_label: str,
+) -> list[_LineItem]:
+    """Build one _LineItem per (customer service) for a single center."""
+    items: list[_LineItem] = []
     for cs in customer_services:
         ps = cs.product_and_service
         rate = cs.rate
         if rate is None or rate <= 0:
             continue
-        qty = quantities_by_product_lower.get(ps.name.lower(), Decimal("0"))
-        if qty <= 0:
-            continue
+
+        qty = _get_quantity(ps.name.lower(), center_metrics)
+        if qty is None:
+            continue  # product has no column mapping in this file format
         amount = (qty * rate).quantize(Decimal("0.01"))
-        total += amount
+
+        service_code = cs.service_code.code if cs.service_code else ""
+        description = f"{center_prefix} - {month_label} Invoice month {service_code}".strip()
+
         qbo_payload: dict[str, Any] = {
             "DetailType": "SalesItemLineDetail",
+            "Description": description,
             "Amount": float(amount),
             "SalesItemLineDetail": {
                 "ItemRef": {"value": ps.qbo_id},
@@ -242,25 +391,65 @@ def _build_qbo_invoice_payload(
                 "UnitPrice": float(rate),
             },
         }
-        line_items.append(_LineItem(
+        items.append(_LineItem(
             product_and_service_id=ps.id,
             product_name=ps.name,
+            center_prefix=center_prefix,
+            description=description,
             quantity=qty,
             rate=rate,
             amount=amount,
             qbo_payload=qbo_payload,
         ))
+    return items
 
-    if not line_items:
+
+def _build_qbo_invoice_payload(
+    customer: Customer,
+    center_names: list[str],
+    parsed: ParsedFile,
+    center_by_name: dict[str, Center],
+    customer_services: list[CustomerProductAndService],
+    inv_date: date,
+) -> tuple[dict[str, Any], Decimal, list[_LineItem]] | None:
+    """Build the QBO invoice payload with per-center line items."""
+    month_label = _month_label(inv_date)
+    due = _due_date(inv_date)
+    memo = _memo(inv_date)
+
+    all_line_items: list[_LineItem] = []
+
+    for name in center_names:
+        ctr = center_by_name.get(name.lower())
+        if ctr is None:
+            continue
+        name_lower = name.lower()
+        # Metrics keyed by col-0 value (= Center.name lower)
+        center_metrics = parsed.rows.get(name_lower, {})
+        # Description prefix = first token of col-2; fall back to center name
+        center_prefix = parsed.center_prefixes.get(name_lower, ctr.name)
+
+        items = _build_line_items_for_center(
+            center_prefix=center_prefix,
+            center_metrics=center_metrics,
+            customer_services=customer_services,
+            month_label=month_label,
+        )
+        all_line_items.extend(items)
+
+    if not all_line_items:
         return None
 
-    memo = "Centers: " + ", ".join(center_names)
+    total = sum(li.amount for li in all_line_items)
+
     payload: dict[str, Any] = {
         "CustomerRef": {"value": customer.qbo_id},
-        "Line": [li.qbo_payload for li in line_items],
-        "CustomerMemo": {"value": memo[:4000]},
+        "TxnDate": inv_date.isoformat(),
+        "DueDate": due.isoformat(),
+        "CustomerMemo": {"value": memo},
+        "Line": [li.qbo_payload for li in all_line_items],
     }
-    return payload, total, line_items
+    return payload, total, all_line_items
 
 
 def generate_invoices(
@@ -281,74 +470,60 @@ def generate_invoices(
         result.errors.append("File contains no data rows.")
         return result
 
-    if not parsed.product_columns:
-        result.errors.append("File has only one column. At least one product/service column is required.")
-        return result
-
     result.total_center_rows = len(parsed.rows)
 
-    # 2. Load all centers by name (case-insensitive lookup)
-    center_names_in_file = list(parsed.rows.keys())
+    # 2. Load centers — match col-0 values case-insensitively against Center.name
+    names_in_file = list(parsed.rows.keys())  # col-0 values, already lowercase
     centers_in_db: list[Center] = (
         db.query(Center)
-        .filter(sa_func.lower(Center.name).in_([n.lower() for n in center_names_in_file]))
+        .filter(sa_func.lower(Center.name).in_(names_in_file))
         .all()
     )
-    # keyed by lowercase name so lookups are case-insensitive
     center_by_name: dict[str, Center] = {c.name.lower(): c for c in centers_in_db}
 
     matched_names: list[str] = []
-    for name in center_names_in_file:
-        if name.lower() in center_by_name:
-            matched_names.append(name)
+    for name_lower in names_in_file:
+        if name_lower in center_by_name:
+            matched_names.append(name_lower)
             result.centers_matched += 1
         else:
             result.centers_skipped += 1
-            result.errors.append(f"Center '{name}' not found in database — row skipped.")
+            result.errors.append(
+                f"Center '{name_lower}' not found in database — row skipped."
+            )
 
     if not matched_names:
-        result.errors.append("No center names in the file matched any center in the database.")
+        result.errors.append("No centers in the file matched any center in the database.")
         return result
 
-    # 3. Group matched centers by customer (company_id)
-    customer_ids: set[int] = {center_by_name[n.lower()].company_id for n in matched_names}
+    # 3. Group matched centers by customer
+    customer_ids: set[int] = {center_by_name[n].company_id for n in matched_names}
     customers: list[Customer] = (
         db.query(Customer)
         .filter(Customer.id.in_(customer_ids))
         .options(
-            selectinload(Customer.customer_services).selectinload(CustomerProductAndService.product_and_service)
+            selectinload(Customer.customer_services)
+            .selectinload(CustomerProductAndService.product_and_service),
+            selectinload(Customer.customer_services)
+            .selectinload(CustomerProductAndService.service_code),
         )
         .all()
     )
     customer_by_id: dict[int, Customer] = {c.id: c for c in customers}
 
-    # Load invoice groupings for all relevant customers
     invoices: list[Invoice] = (
         db.query(Invoice)
         .options(selectinload(Invoice.centers))
         .filter(Invoice.company_id.in_(customer_ids))
         .all()
     )
-    # {company_id: [Invoice, ...]}
     invoices_by_company: dict[int, list[Invoice]] = {}
     for inv in invoices:
         invoices_by_company.setdefault(inv.company_id, []).append(inv)
 
-    # 4. Load all product/service records (name → model)
-    all_product_col_lowers = {col.lower() for col in parsed.product_columns}
-    products_in_file: list[ProductAndService] = (
-        db.query(ProductAndService)
-        .filter(ProductAndService.active == True)  # noqa: E712
-        .all()
-    )
-    # filter to only those whose name matches a column in the file
-    product_lower_to_model: dict[str, ProductAndService] = {
-        ps.name.lower(): ps
-        for ps in products_in_file
-        if ps.name.lower() in all_product_col_lowers
-    }
+    inv_date = _invoice_date()
 
-    # 5. Generate invoices per customer
+    # 4. Generate invoices per customer
     for company_id in customer_ids:
         customer = customer_by_id.get(company_id)
         if not customer:
@@ -359,69 +534,61 @@ def generate_invoices(
             )
             continue
 
-        # Centers in the file that belong to this customer
-        customer_centers_in_file = [
-            n for n in matched_names if center_by_name[n.lower()].company_id == company_id
-        ]
-        if not customer_centers_in_file:
+        customer_centers = [n for n in matched_names if center_by_name[n].company_id == company_id]
+        if not customer_centers:
             continue
 
-        # Customer's service entries whose product appears in the file
-        customer_services_in_file = [
+        # Only keep services with active products and valid rates
+        active_services = [
             cs for cs in customer.customer_services
-            if cs.product_and_service.name.lower() in product_lower_to_model
-            and cs.product_and_service.active
+            if cs.product_and_service.active and cs.rate and cs.rate > 0
         ]
-        if not customer_services_in_file:
+        if not active_services:
             result.errors.append(
-                f"Customer '{customer.display_name}' has no matching product/service columns in the file — skipped."
+                f"Customer '{customer.display_name}' has no active services with valid rates — skipped."
             )
             continue
 
-        # Map center id → grouped invoice (or None = standalone)
+        # Map center id → invoice grouping
         center_id_to_invoice: dict[int, Invoice | None] = {
-            center_by_name[n.lower()].id: None for n in customer_centers_in_file
+            center_by_name[n].id: None for n in customer_centers
         }
         for inv in invoices_by_company.get(company_id, []):
             for c in inv.centers:
                 if c.id in center_id_to_invoice:
                     center_id_to_invoice[c.id] = inv
 
-        # Build groups: invoice_id (or None=standalone) → list of center names
+        # Build groups: invoice_id (or None = standalone) → list of center name lowers
         group_map: dict[int | None, list[str]] = {}
-        for name in customer_centers_in_file:
-            ctr = center_by_name[name.lower()]
+        for name_lower in customer_centers:
+            ctr = center_by_name[name_lower]
             inv = center_id_to_invoice.get(ctr.id)
             key = inv.id if inv else None
-            group_map.setdefault(key, []).append(name)
+            group_map.setdefault(key, []).append(name_lower)
 
-        for group_key, group_center_names in group_map.items():
-            # Sum quantities across all centers in this group
-            combined: dict[str, Decimal] = {}
-            for name in group_center_names:
-                for prod_lower, qty in parsed.rows[name].items():
-                    combined[prod_lower] = combined.get(prod_lower, Decimal("0")) + qty
+        for group_key, group_name_lowers in group_map.items():
+            # Use actual Center.name values for readability
+            group_center_names = [center_by_name[n].name for n in group_name_lowers]
 
             if group_key is None:
-                # Standalone centers — one invoice per center
-                for standalone_name in group_center_names:
-                    qty_map = parsed.rows[standalone_name]
+                for standalone_name in group_name_lowers:
+                    ctr_name = center_by_name[standalone_name].name
                     _create_and_send(
                         db=db,
                         qbo=qbo,
                         access_token=access_token,
                         realm_id=realm_id,
                         customer=customer,
-                        center_names=[standalone_name],
+                        center_names=[ctr_name],
                         center_by_name=center_by_name,
-                        quantities=qty_map,
-                        customer_services=customer_services_in_file,
+                        parsed=parsed,
+                        customer_services=active_services,
+                        inv_date=inv_date,
                         result=result,
                         is_standalone=True,
                         invoice_upload_id=invoice_upload_id,
                     )
             else:
-                # Grouped centers — one combined invoice
                 _create_and_send(
                     db=db,
                     qbo=qbo,
@@ -430,8 +597,9 @@ def generate_invoices(
                     customer=customer,
                     center_names=group_center_names,
                     center_by_name=center_by_name,
-                    quantities=combined,
-                    customer_services=customer_services_in_file,
+                    parsed=parsed,
+                    customer_services=active_services,
+                    inv_date=inv_date,
                     result=result,
                     is_standalone=False,
                     invoice_upload_id=invoice_upload_id,
@@ -448,8 +616,9 @@ def _create_and_send(
     customer: Customer,
     center_names: list[str],
     center_by_name: dict[str, Center],
-    quantities: dict[str, Decimal],
+    parsed: ParsedFile,
     customer_services: list[CustomerProductAndService],
+    inv_date: date,
     result: GenerationResult,
     is_standalone: bool,
     invoice_upload_id: int | None = None,
@@ -459,16 +628,22 @@ def _create_and_send(
         if is_standalone
         else " + ".join(center_names)
     )
-    built = _build_qbo_invoice_payload(customer, center_names, quantities, customer_services)
+    built = _build_qbo_invoice_payload(
+        customer=customer,
+        center_names=center_names,
+        parsed=parsed,
+        center_by_name=center_by_name,
+        customer_services=customer_services,
+        inv_date=inv_date,
+    )
     if built is None:
         result.errors.append(
-            f"Customer '{customer.display_name}' / {label}: no line items with valid rate and non-zero quantity — invoice skipped."
+            f"Customer '{customer.display_name}' / {label}: no line items — invoice skipped."
         )
         return
 
     payload, total_amount, line_items = built
 
-    # Create DB record upfront so failures are also persisted
     gen_inv: GeneratedInvoice | None = None
     if invoice_upload_id is not None:
         gen_inv = GeneratedInvoice(
@@ -479,7 +654,7 @@ def _create_and_send(
             send_status="pending",
         )
         db.add(gen_inv)
-        db.flush()  # populate gen_inv.id
+        db.flush()
 
         for name in center_names:
             ctr = center_by_name.get(name.lower())
@@ -494,6 +669,7 @@ def _create_and_send(
                 generated_invoice_id=gen_inv.id,
                 product_and_service_id=li.product_and_service_id,
                 product_name=li.product_name,
+                description=li.description,
                 quantity=li.quantity,
                 rate=li.rate,
                 amount=li.amount,

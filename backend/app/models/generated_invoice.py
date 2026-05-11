@@ -70,6 +70,7 @@ class GeneratedInvoiceLineItem(Base):
         Integer, ForeignKey("product_and_services.id", ondelete="SET NULL"), nullable=True
     )
     product_name: Mapped[str] = mapped_column(String(500), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
     quantity: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False)
     rate: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False)
     amount: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False)

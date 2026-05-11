@@ -52,16 +52,19 @@ def _apply_customer_service_links(
     if missing_sc:
         raise ValueError(f"Unknown service_code_ids: {missing_sc}")
 
-    # Replace all existing customer_services
-    row.customer_services = [
-        CustomerProductAndService(
-            customer_id=row.id,
-            product_and_service_id=svc.product_and_service_id,
-            service_code_id=svc.service_code_id,
-            rate=svc.rate,
+    # Delete existing rows first and flush so the DB releases the unique slots
+    # before we insert the replacement rows (avoids UniqueViolation on flush).
+    row.customer_services.clear()
+    db.flush()
+    for svc in services:
+        row.customer_services.append(
+            CustomerProductAndService(
+                customer_id=row.id,
+                product_and_service_id=svc.product_and_service_id,
+                service_code_id=svc.service_code_id,
+                rate=svc.rate,
+            )
         )
-        for svc in services
-    ]
 
 
 def _apply_customer_type_links(db: Session, row: Customer, ids: list[int] | None) -> None:

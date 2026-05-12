@@ -115,6 +115,10 @@ class ParsedFile:
     metric_columns: list[str] = field(default_factory=list)
     # center_name_lower → first token of col 2 (used in line-item descriptions)
     center_prefixes: dict[str, str] = field(default_factory=dict)
+    # center_name_lower → original-case col 0 value
+    center_display_names: dict[str, str] = field(default_factory=dict)
+    # center_name_lower → col 1 value (Center Name column)
+    center_col1_names: dict[str, str] = field(default_factory=dict)
 
 
 def _to_decimal(value: Any) -> Decimal:
@@ -168,6 +172,8 @@ def _parse_raw_data_rows(
             raw_val = row[i] if i < len(row) else None
             metrics[col_header.lower()] = _to_decimal(raw_val)
 
+        col1_name = str(row[1]).strip() if len(row) > 1 and row[1] is not None else ""
+
         # Accumulate if the same center appears on multiple rows
         if center_name_lower in result.rows:
             existing = result.rows[center_name_lower]
@@ -176,6 +182,8 @@ def _parse_raw_data_rows(
         else:
             result.rows[center_name_lower] = metrics
             result.center_prefixes[center_name_lower] = desc_prefix
+            result.center_display_names[center_name_lower] = center_name
+            result.center_col1_names[center_name_lower] = col1_name
 
     return result
 
@@ -389,6 +397,7 @@ def _build_line_items_for_center(
                 "ItemRef": {"value": ps.qbo_id},
                 "Qty": float(qty),
                 "UnitPrice": float(rate),
+                "TaxCodeRef": {"value": "TAX"},
             },
         }
         items.append(_LineItem(
@@ -447,24 +456,22 @@ def _build_qbo_invoice_payload(
         "TxnDate": inv_date.isoformat(),
         "DueDate": due.isoformat(),
         "CustomerMemo": {"value": memo},
+        "GlobalTaxCalculation": "TaxExcluded",
         "Line": [li.qbo_payload for li in all_line_items],
     }
     return payload, total, all_line_items
 
 
-def generate_invoices(
+def generate_invoices_from_parsed(
     db: Session,
     qbo: SupportsQuickBooks,
     access_token: str,
     realm_id: str,
-    filename: str,
-    content: bytes,
+    parsed: ParsedFile,
     invoice_upload_id: int | None = None,
 ) -> GenerationResult:
+    """Run invoice generation from a pre-built ParsedFile (skips file parsing)."""
     result = GenerationResult()
-
-    # 1. Parse file
-    parsed = parse_spreadsheet(filename, content)
 
     if not parsed.rows:
         result.errors.append("File contains no data rows.")
@@ -472,8 +479,7 @@ def generate_invoices(
 
     result.total_center_rows = len(parsed.rows)
 
-    # 2. Load centers — match col-0 values case-insensitively against Center.name
-    names_in_file = list(parsed.rows.keys())  # col-0 values, already lowercase
+    names_in_file = list(parsed.rows.keys())
     centers_in_db: list[Center] = (
         db.query(Center)
         .filter(sa_func.lower(Center.name).in_(names_in_file))
@@ -488,15 +494,12 @@ def generate_invoices(
             result.centers_matched += 1
         else:
             result.centers_skipped += 1
-            result.errors.append(
-                f"Center '{name_lower}' not found in database — row skipped."
-            )
+            result.errors.append(f"Center '{name_lower}' not found in database — row skipped.")
 
     if not matched_names:
         result.errors.append("No centers in the file matched any center in the database.")
         return result
 
-    # 3. Group matched centers by customer
     customer_ids: set[int] = {center_by_name[n].company_id for n in matched_names}
     customers: list[Customer] = (
         db.query(Customer)
@@ -523,7 +526,6 @@ def generate_invoices(
 
     inv_date = _invoice_date()
 
-    # 4. Generate invoices per customer
     for company_id in customer_ids:
         customer = customer_by_id.get(company_id)
         if not customer:
@@ -538,7 +540,6 @@ def generate_invoices(
         if not customer_centers:
             continue
 
-        # Only keep services with active products and valid rates
         active_services = [
             cs for cs in customer.customer_services
             if cs.product_and_service.active and cs.rate and cs.rate > 0
@@ -549,7 +550,6 @@ def generate_invoices(
             )
             continue
 
-        # Map center id → invoice grouping
         center_id_to_invoice: dict[int, Invoice | None] = {
             center_by_name[n].id: None for n in customer_centers
         }
@@ -558,7 +558,6 @@ def generate_invoices(
                 if c.id in center_id_to_invoice:
                     center_id_to_invoice[c.id] = inv
 
-        # Build groups: invoice_id (or None = standalone) → list of center name lowers
         group_map: dict[int | None, list[str]] = {}
         for name_lower in customer_centers:
             ctr = center_by_name[name_lower]
@@ -567,45 +566,49 @@ def generate_invoices(
             group_map.setdefault(key, []).append(name_lower)
 
         for group_key, group_name_lowers in group_map.items():
-            # Use actual Center.name values for readability
             group_center_names = [center_by_name[n].name for n in group_name_lowers]
 
             if group_key is None:
                 for standalone_name in group_name_lowers:
                     ctr_name = center_by_name[standalone_name].name
                     _create_and_send(
-                        db=db,
-                        qbo=qbo,
-                        access_token=access_token,
-                        realm_id=realm_id,
-                        customer=customer,
-                        center_names=[ctr_name],
-                        center_by_name=center_by_name,
-                        parsed=parsed,
-                        customer_services=active_services,
-                        inv_date=inv_date,
-                        result=result,
-                        is_standalone=True,
+                        db=db, qbo=qbo, access_token=access_token, realm_id=realm_id,
+                        customer=customer, center_names=[ctr_name],
+                        center_by_name=center_by_name, parsed=parsed,
+                        customer_services=active_services, inv_date=inv_date,
+                        result=result, is_standalone=True,
                         invoice_upload_id=invoice_upload_id,
                     )
             else:
                 _create_and_send(
-                    db=db,
-                    qbo=qbo,
-                    access_token=access_token,
-                    realm_id=realm_id,
-                    customer=customer,
-                    center_names=group_center_names,
-                    center_by_name=center_by_name,
-                    parsed=parsed,
-                    customer_services=active_services,
-                    inv_date=inv_date,
-                    result=result,
-                    is_standalone=False,
+                    db=db, qbo=qbo, access_token=access_token, realm_id=realm_id,
+                    customer=customer, center_names=group_center_names,
+                    center_by_name=center_by_name, parsed=parsed,
+                    customer_services=active_services, inv_date=inv_date,
+                    result=result, is_standalone=False,
                     invoice_upload_id=invoice_upload_id,
                 )
 
     return result
+
+
+def generate_invoices(
+    db: Session,
+    qbo: SupportsQuickBooks,
+    access_token: str,
+    realm_id: str,
+    filename: str,
+    content: bytes,
+    invoice_upload_id: int | None = None,
+) -> GenerationResult:
+    result = GenerationResult()
+
+    # 1. Parse file
+    parsed = parse_spreadsheet(filename, content)
+    return generate_invoices_from_parsed(
+        db=db, qbo=qbo, access_token=access_token, realm_id=realm_id,
+        parsed=parsed, invoice_upload_id=invoice_upload_id,
+    )
 
 
 def generate_attachment_xlsx(

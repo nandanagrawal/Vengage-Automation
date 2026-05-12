@@ -13,9 +13,11 @@ class GeneratedInvoice(Base):
     __tablename__ = "generated_invoices"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    invoice_upload_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("invoice_uploads.id", ondelete="CASCADE"), nullable=False, index=True
+    invoice_upload_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("invoice_uploads.id", ondelete="CASCADE"), nullable=True, index=True
     )
+    # "platform" = created via our upload flow; "quickbooks" = received via webhook
+    source: Mapped[str] = mapped_column(String(32), nullable=False, default="platform")
     customer_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("customers.id", ondelete="SET NULL"), nullable=True, index=True
     )

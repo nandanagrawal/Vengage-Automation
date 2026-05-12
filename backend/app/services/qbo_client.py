@@ -84,6 +84,21 @@ class SupportsQuickBooks(Protocol):
         file_bytes: bytes,
     ) -> dict[str, Any]: ...
 
+    def get_invoice(
+        self,
+        access_token: str,
+        realm_id: str,
+        invoice_id: str,
+    ) -> dict[str, Any]: ...
+
+    def query_invoices(
+        self,
+        access_token: str,
+        realm_id: str,
+        start_position: int = 1,
+        max_results: int = 1000,
+    ) -> list[dict[str, Any]]: ...
+
 
 def _headers(access_token: str) -> dict[str, str]:
     return {
@@ -375,6 +390,44 @@ class QuickBooksClient:
             )
 
         raise last_err  # type: ignore[misc]
+
+    def get_invoice(
+        self,
+        access_token: str,
+        realm_id: str,
+        invoice_id: str,
+    ) -> dict[str, Any]:
+        url = f"{self.base_url()}/v3/company/{realm_id}/invoice/{invoice_id}?minorversion={self._minor()}"
+        with httpx.Client(timeout=30.0) as client:
+            res = client.get(url, headers=_headers(access_token))
+            if not res.is_success:
+                raise httpx.HTTPStatusError(
+                    f"{res.status_code} from QBO get_invoice({invoice_id}): {res.text}",
+                    request=res.request,
+                    response=res,
+                )
+            return res.json().get("Invoice", {})
+
+    def query_invoices(
+        self,
+        access_token: str,
+        realm_id: str,
+        start_position: int = 1,
+        max_results: int = 1000,
+    ) -> list[dict[str, Any]]:
+        from urllib.parse import quote as _q
+        sql = f"SELECT * FROM Invoice STARTPOSITION {start_position} MAXRESULTS {max_results} ORDERBY MetaData.LastUpdatedTime DESC"
+        url = f"{self.base_url()}/v3/company/{realm_id}/query?query={_q(sql)}&minorversion={self._minor()}"
+        with httpx.Client(timeout=60.0) as client:
+            res = client.get(url, headers=_headers(access_token))
+            if not res.is_success:
+                raise httpx.HTTPStatusError(
+                    f"{res.status_code} from QBO query_invoices: {res.text}",
+                    request=res.request,
+                    response=res,
+                )
+            qr = res.json().get("QueryResponse", {})
+            return qr.get("Invoice", [])
 
 
 def phone_block(number: str | None) -> dict[str, str] | None:

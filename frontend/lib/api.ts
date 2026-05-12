@@ -297,6 +297,16 @@ export type InvoiceUploadResult = {
   errors: string[];
 };
 
+export async function apiPostBlob(path: string, body: unknown): Promise<Blob> {
+  const r = await fetch(`${API_V1_BASE}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify(body),
+  });
+  await assertOk(r);
+  return r.blob();
+}
+
 export async function apiUploadInvoiceFile(file: File): Promise<InvoiceUploadResult> {
   const form = new FormData();
   form.append("file", file);
@@ -367,6 +377,134 @@ export type DashboardStats = {
   pending_customers: number;
   approved_customers: number;
 };
+
+// ── Invoice validation / multi-step flow ──────────────────────────────────────
+
+export type ValidatedRow = {
+  row_index: number;
+  center_id: string;
+  center_name: string;
+  center_prefix: string;
+  metrics: Record<string, number>;
+  errors: string[];
+  customer_id: number | null;
+  customer_display_name: string | null;
+  matched: boolean;
+};
+
+export type CustomerError = {
+  customer_display_name: string;
+  errors: string[];
+};
+
+export type ValidationResponse = {
+  metric_columns: string[];
+  rows: ValidatedRow[];
+  customer_errors: CustomerError[];
+  has_errors: boolean;
+};
+
+export type PreviewCenter = {
+  center_id: string;
+  center_name: string;
+  center_prefix: string;
+  metrics: Record<string, number>;
+};
+
+export type PreviewGroup = {
+  group_label: string;
+  centers: PreviewCenter[];
+};
+
+export type PreviewCustomer = {
+  customer_id: number;
+  display_name: string;
+  add_attachment_in_mail: boolean;
+  primary_email: string | null;
+  has_qbo_id: boolean;
+  groups: PreviewGroup[];
+};
+
+export type PreviewResponse = {
+  metric_columns: string[];
+  customers: PreviewCustomer[];
+  warnings: string[];
+};
+
+export type GenerateRequest = {
+  metric_columns: string[];
+  rows: ValidatedRow[];
+};
+
+export async function apiValidateInvoiceFile(file: File): Promise<ValidationResponse> {
+  const form = new FormData();
+  form.append("file", file);
+  const r = await fetch(`${API_V1_BASE}/invoice-uploads/validate`, {
+    method: "POST",
+    headers: authHeaders(),
+    body: form,
+  });
+  await assertOk(r);
+  return r.json() as Promise<ValidationResponse>;
+}
+
+export async function apiRevalidate(
+  metric_columns: string[],
+  rows: ValidatedRow[],
+): Promise<ValidationResponse> {
+  return apiPost<ValidationResponse>("/invoice-uploads/revalidate", { metric_columns, rows });
+}
+
+export async function apiPreview(
+  metric_columns: string[],
+  rows: ValidatedRow[],
+): Promise<PreviewResponse> {
+  return apiPost<PreviewResponse>("/invoice-uploads/preview", { metric_columns, rows });
+}
+
+export async function apiDownloadAttachmentPreview(
+  customer_id: number,
+  metric_columns: string[],
+  rows: ValidatedRow[],
+): Promise<Blob> {
+  return apiPostBlob("/invoice-uploads/attachment-preview", { customer_id, metric_columns, rows });
+}
+
+export async function apiGenerateInvoices(req: GenerateRequest): Promise<InvoiceUploadResult> {
+  return apiPost<InvoiceUploadResult>("/invoice-uploads/generate", req);
+}
+
+export type GeneratedInvoiceItem = {
+  id: number;
+  invoice_number: string | null;
+  quickbooks_invoice_id: string | null;
+  customer_id: number | null;
+  customer_name: string | null;
+  center_group_name: string;
+  total_amount: string;
+  send_status: string;
+  source: string;
+  error_message: string | null;
+  created_at: string;
+  centers: { id: number; center_name: string }[];
+  line_items: { id: number; product_name: string; quantity: string; rate: string; amount: string }[];
+};
+
+export type GeneratedInvoiceListResponse = {
+  total: number;
+  items: GeneratedInvoiceItem[];
+};
+
+export async function apiGetGeneratedInvoices(
+  params?: { customer_id?: number; limit?: number; offset?: number },
+): Promise<GeneratedInvoiceListResponse> {
+  const qs = new URLSearchParams();
+  if (params?.customer_id != null) qs.set("customer_id", String(params.customer_id));
+  if (params?.limit != null) qs.set("limit", String(params.limit));
+  if (params?.offset != null) qs.set("offset", String(params.offset));
+  const q = qs.toString();
+  return apiGet<GeneratedInvoiceListResponse>(`/generated-invoices${q ? `?${q}` : ""}`);
+}
 
 export type AuthToken = { access_token: string; token_type: string };
 

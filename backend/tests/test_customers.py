@@ -163,11 +163,24 @@ def test_webhook_creates_customer_as_approved(client, fake_qbo):
     db.close()
 
 
-def test_webhook_non_customer_entity_ignored(client):
+def test_webhook_invoice_entity_processed(client):
+    # Invoice events are now processed (upserted into generated_invoices)
     r = client.post("/api/v1/webhooks/intuit", json={
         "eventNotifications": [{
             "dataChangeEvent": {
                 "entities": [{"name": "Invoice", "id": "1", "operation": "Create"}]
+            }
+        }]
+    })
+    assert r.status_code == 200
+    assert r.json()["processed"] == 1
+
+
+def test_webhook_unknown_entity_ignored(client):
+    r = client.post("/api/v1/webhooks/intuit", json={
+        "eventNotifications": [{
+            "dataChangeEvent": {
+                "entities": [{"name": "Payment", "id": "1", "operation": "Create"}]
             }
         }]
     })

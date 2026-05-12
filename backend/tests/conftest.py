@@ -126,6 +126,12 @@ class FakeQBO:
         self._next_attach_id += 1
         return {"Attachable": {"Id": aid, "FileName": filename}}
 
+    def get_invoice(self, access_token: str, realm_id: str, invoice_id: str) -> dict:
+        return {"Id": invoice_id, "DocNumber": f"INV-{invoice_id}", "TotalAmt": 0.0, "EmailStatus": "NotSet", "CustomerRef": {"value": "fake"}}
+
+    def query_invoices(self, access_token: str, realm_id: str, start_position: int = 1, max_results: int = 1000) -> list:
+        return []
+
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 

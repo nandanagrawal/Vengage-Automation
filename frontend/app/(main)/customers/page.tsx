@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { apiDelete, apiGet, apiPatch, apiPost, apiUpload, type CustomerRow, type SyncResult, type UploadAttachmentsResult } from "@/lib/api";
 import { useAuth } from "@/lib/useAuth";
@@ -32,6 +33,7 @@ const COLS = "grid-cols-[minmax(0,2fr)_minmax(0,1.5fr)_4.5rem_8rem_12rem]";
 
 export default function CustomersPage() {
   const { user } = useAuth();
+  const router = useRouter();
   const isAdmin = user?.role === "admin";
 
   const [rows, setRows] = useState<CustomerRow[]>([]);
@@ -289,8 +291,10 @@ export default function CustomersPage() {
           {paginated.map((c, i) => {
             const ss = statusStyle(c.status);
             return (
-              <div key={c.id} className={`grid max-md:grid-cols-1 items-center px-5 py-3.5 hover:bg-white/[0.03] transition-colors animate-fadeInLeft ${COLS}`}
-                style={{ animationDelay: `${0.02 * i}s` }}>
+              <div key={c.id}
+                className={`grid max-md:grid-cols-1 items-center px-5 py-3.5 hover:bg-white/[0.03] transition-colors animate-fadeInLeft cursor-pointer ${COLS}`}
+                style={{ animationDelay: `${0.02 * i}s` }}
+                onClick={() => router.push(`/customers/${c.id}`)}>
 
                 {/* Customer */}
                 <div className="flex items-center gap-3 min-w-0 pr-4">
@@ -319,11 +323,12 @@ export default function CustomersPage() {
                 </div>
 
                 {/* Actions */}
-                <div className="flex items-center justify-center gap-0.5 flex-wrap">
+                <div className="flex items-center justify-center gap-0.5 flex-wrap" onClick={(e) => e.stopPropagation()}>
                   <Link
                     href={`/invoices?company=${c.id}`}
                     title="Invoice groupings for this customer"
                     className="p-1.5 rounded-lg text-slate-500 hover:text-sky-400 hover:bg-sky-500/10 transition-colors"
+                    onClick={(e) => e.stopPropagation()}
                   >
                     <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
@@ -332,7 +337,7 @@ export default function CustomersPage() {
                   {/* Edit */}
                   <button
                     title="Edit customer"
-                    onClick={() => setEditCustomer(c)}
+                    onClick={(e) => { e.stopPropagation(); setEditCustomer(c); }}
                     className="p-1.5 rounded-lg text-slate-500 hover:text-indigo-400 hover:bg-indigo-500/10 transition-colors"
                   >
                     <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
@@ -343,11 +348,11 @@ export default function CustomersPage() {
                   {/* Approve / Reject (admin, pending only) */}
                   {isAdmin && c.status === "pending" && (
                     <>
-                      <button disabled={approving === c.id} onClick={() => void onApprove(c.id, "approve")}
+                      <button disabled={approving === c.id} onClick={(e) => { e.stopPropagation(); void onApprove(c.id, "approve"); }}
                         className="px-2 py-1 rounded-lg text-xs font-semibold bg-emerald-500/20 text-emerald-400 border border-emerald-500/25 hover:bg-emerald-500/30 transition-colors disabled:opacity-50">
                         {approving === c.id ? "…" : "✓"}
                       </button>
-                      <button disabled={approving === c.id} onClick={() => void onApprove(c.id, "reject")}
+                      <button disabled={approving === c.id} onClick={(e) => { e.stopPropagation(); void onApprove(c.id, "reject"); }}
                         className="px-2 py-1 rounded-lg text-xs font-semibold bg-red-500/20 text-red-400 border border-red-500/25 hover:bg-red-500/30 transition-colors disabled:opacity-50">
                         ✕
                       </button>
@@ -358,7 +363,7 @@ export default function CustomersPage() {
                   {isAdmin && (
                     <button
                       title="Delete customer"
-                      onClick={() => setDeleteTarget(c)}
+                      onClick={(e) => { e.stopPropagation(); setDeleteTarget(c); }}
                       className="p-1.5 rounded-lg text-slate-600 hover:text-red-400 hover:bg-red-500/10 transition-colors"
                     >
                       <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">

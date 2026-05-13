@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { apiDelete, apiGet, apiPatch, apiPost, apiUpload, type CustomerRow, type SyncResult, type UploadAttachmentsResult } from "@/lib/api";
+import { apiDelete, apiGet, apiPatch, apiPost, type CustomerRow, type SyncResult } from "@/lib/api";
 import { useAuth } from "@/lib/useAuth";
 import { CustomerModal } from "./CustomerModal";
 
@@ -77,7 +77,7 @@ export default function CustomersPage() {
     setSyncMsg(null);
     try {
       const res = await apiPost<SyncResult>("/sync/quickbooks");
-      setSyncMsg(`Pulled ${res.customers_pulled} · Pushed ${res.customers_pushed} · Created in QBO ${res.customers_created_remote} · Email rows ${res.invoice_activity_rows} · Attachments pruned ${res.attachments_pruned} · Items upserted ${res.items_upserted} · Items removed locally ${res.items_removed_local}`);
+      setSyncMsg(`Pulled ${res.customers_pulled} · Pushed ${res.customers_pushed} · Created in QBO ${res.customers_created_remote} · Email rows ${res.invoice_activity_rows} · Items upserted ${res.items_upserted} · Items removed locally ${res.items_removed_local}`);
       await load();
     } catch (e) {
       setSyncMsg(e instanceof Error ? e.message : "Sync failed");
@@ -86,23 +86,10 @@ export default function CustomersPage() {
     }
   };
 
-  const uploadFiles = async (customerId: number, files: File[]) => {
-    if (!files.length) return;
-    try {
-      const res = await apiUpload<UploadAttachmentsResult>(`/customers/${customerId}/attachments`, files);
-      if (res.errors.length) {
-        setLoadError(`Some uploads failed: ${res.errors.join("; ")}`);
-      }
-    } catch (e) {
-      setLoadError(e instanceof Error ? e.message : "Attachment upload failed");
-    }
-  };
-
-  const onCreate = async (payload: Record<string, unknown>, files: File[]): Promise<CustomerRow> => {
+  const onCreate = async (payload: Record<string, unknown>): Promise<CustomerRow> => {
     setSaving(true);
     try {
       const created = await apiPost<CustomerRow>("/customers", payload);
-      if (files.length && created.qbo_id) await uploadFiles(created.id, files);
       await load();
       return created;
     } catch (e) {
@@ -113,12 +100,11 @@ export default function CustomersPage() {
     }
   };
 
-  const onEdit = async (payload: Record<string, unknown>, files: File[]): Promise<CustomerRow> => {
+  const onEdit = async (payload: Record<string, unknown>): Promise<CustomerRow> => {
     if (!editCustomer) throw new Error("No customer selected");
     setSaving(true);
     try {
       const updated = await apiPatch<CustomerRow>(`/customers/${editCustomer.id}`, payload);
-      if (files.length) await uploadFiles(updated.id, files);
       await load();
       return updated;
     } catch (e) {

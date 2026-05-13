@@ -161,7 +161,6 @@ class SyncResult(BaseModel):
     customers_pushed: int = 0
     customers_created_remote: int = 0
     invoice_activity_rows: int = 0
-    attachments_pruned: int = 0
     items_upserted: int = 0
     items_removed_local: int = 0
     message: str = "OK"

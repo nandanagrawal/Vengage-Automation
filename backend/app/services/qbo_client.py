@@ -40,23 +40,6 @@ class SupportsQuickBooks(Protocol):
         since: date,
     ) -> list[dict[str, Any]]: ...
 
-    def upload_attachment(
-        self,
-        access_token: str,
-        realm_id: str,
-        customer_id: str,
-        filename: str,
-        content_type: str,
-        file_bytes: bytes,
-    ) -> dict[str, Any]: ...
-
-    def query_attachables_for_customer(
-        self,
-        access_token: str,
-        realm_id: str,
-        customer_qbo_id: str,
-    ) -> list[dict[str, Any]]: ...
-
     def query_items(self, access_token: str, realm_id: str) -> list[dict[str, Any]]: ...
 
     def create_invoice(
@@ -203,72 +186,6 @@ class QuickBooksClient:
             if isinstance(rows, dict):
                 rows = [rows]
             return rows
-
-    def upload_attachment(
-        self,
-        access_token: str,
-        realm_id: str,
-        customer_id: str,
-        filename: str,
-        content_type: str,
-        file_bytes: bytes,
-    ) -> dict[str, Any]:
-        import json as _json
-        metadata = _json.dumps({
-            "AttachableRef": [{"EntityRef": {"type": "Customer", "value": customer_id}}],
-            "ContentType": content_type,
-            "FileName": filename,
-        })
-        url = f"{self.base_url()}/v3/company/{realm_id}/upload"
-        with httpx.Client(timeout=120.0) as client:
-            res = client.post(
-                url,
-                headers={"Authorization": f"Bearer {access_token}", "Accept": "application/json"},
-                files={
-                    "file_metadata_01": ("attachment.json", metadata.encode(), "application/json"),
-                    "file_content_01": (filename, file_bytes, content_type),
-                },
-            )
-            if not res.is_success:
-                raise httpx.HTTPStatusError(
-                    f"{res.status_code} from QBO upload: {res.text}",
-                    request=res.request,
-                    response=res,
-                )
-            return res.json()
-
-    def query_attachables_for_customer(
-        self,
-        access_token: str,
-        realm_id: str,
-        customer_qbo_id: str,
-    ) -> list[dict[str, Any]]:
-        """Return Attachable entities still linked to this QBO Customer (for sync reconciliation)."""
-        cid = str(customer_qbo_id).replace("'", "''")
-        base_sql = (
-            f"SELECT * FROM Attachable WHERE AttachableRef.EntityRef.value = '{cid}' "
-            "AND AttachableRef.EntityRef.type = 'Customer'"
-        )
-        out: list[dict[str, Any]] = []
-        start = 1
-        page_size = 100
-        with httpx.Client(timeout=60.0) as client:
-            while True:
-                q = quote(f"{base_sql} STARTPOSITION {start} MAXRESULTS {page_size}")
-                url = f"{self.base_url()}/v3/company/{realm_id}/query?query={q}&minorversion={self._minor()}"
-                res = client.get(url, headers=_headers(access_token))
-                res.raise_for_status()
-                data = res.json()
-                batch = data.get("QueryResponse", {}).get("Attachable", []) or []
-                if isinstance(batch, dict):
-                    batch = [batch]
-                if not batch:
-                    break
-                out.extend(batch)
-                if len(batch) < page_size:
-                    break
-                start += page_size
-        return out
 
     def query_items(self, access_token: str, realm_id: str) -> list[dict[str, Any]]:
         """Paginated Item query — full catalog (no Active/Type filter)."""

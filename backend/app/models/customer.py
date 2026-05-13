@@ -90,12 +90,6 @@ class Customer(Base):
     )
     qbo_last_updated: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
-    attachments: Mapped[list["CustomerAttachment"]] = relationship(
-        "CustomerAttachment",
-        back_populates="customer",
-        cascade="all, delete-orphan",
-    )
-
     customer_services: Mapped[list["CustomerProductAndService"]] = relationship(
         "CustomerProductAndService",
         back_populates="customer",

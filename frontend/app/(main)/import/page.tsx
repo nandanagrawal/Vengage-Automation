@@ -2,13 +2,11 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  apiDownloadAttachmentPreview,
   apiGenerateInvoices,
   apiGet,
   apiPreview,
   apiRevalidate,
   apiValidateInvoiceFile,
-  downloadBlobAsFile,
   type CustomerError,
   type GenerateRequest,
   type InvoiceUploadResult,
@@ -19,6 +17,7 @@ import {
   type ValidatedRow,
   type ValidationResponse,
 } from "@/lib/api";
+import { addJob, updateJob } from "@/lib/jobQueue";
 
 // ── Shared helpers ────────────────────────────────────────────────────────────
 
@@ -43,7 +42,7 @@ function StatusBadge({ status }: { status: string }) {
 function SendStatusDot({ status }: { status: string }) {
   if (status === "sent") return <span className="inline-flex items-center gap-1 text-emerald-400 text-xs"><span className="w-1.5 h-1.5 rounded-full bg-emerald-400 inline-block" />Sent</span>;
   if (status === "failed") return <span className="inline-flex items-center gap-1 text-rose-400 text-xs"><span className="w-1.5 h-1.5 rounded-full bg-rose-400 inline-block" />Failed</span>;
-  return <span className="inline-flex items-center gap-1 text-slate-400 text-xs"><span className="w-1.5 h-1.5 rounded-full bg-slate-500 inline-block" />Pending</span>;
+  return <span className="inline-flex items-center gap-1 text-indigo-400 text-xs"><span className="w-1.5 h-1.5 rounded-full bg-indigo-400 inline-block" />Created</span>;
 }
 
 function fmtDate(iso: string) {
@@ -264,34 +263,6 @@ function ErrorsStage({
 
 // ── Stage: Preview (customer-grouped, editable) ───────────────────────────────
 
-function AttachmentCell({ customer, metricCols, rows }: { customer: PreviewCustomer; metricCols: string[]; rows: ValidatedRow[] }) {
-  const [loading, setLoading] = useState(false);
-  if (!customer.add_attachment_in_mail) {
-    return <span className="text-slate-600 text-xs">—</span>;
-  }
-  const handleDownload = async () => {
-    setLoading(true);
-    try {
-      const customerRows = rows.filter(r => r.customer_id === customer.customer_id);
-      const blob = await apiDownloadAttachmentPreview(customer.customer_id, metricCols, customerRows);
-      downloadBlobAsFile(blob, `Invoice_Preview_${customer.display_name.replace(/[^a-z0-9]/gi, "_")}.xlsx`);
-    } catch {
-      // ignore
-    } finally {
-      setLoading(false);
-    }
-  };
-  return (
-    <button type="button" onClick={() => void handleDownload()} disabled={loading}
-      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 hover:bg-indigo-500/20 transition-colors disabled:opacity-50">
-      {loading
-        ? <svg className="w-3 h-3 animate-spin" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9" /></svg>
-        : <svg className="w-3 h-3" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" /></svg>}
-      Preview XLS
-    </button>
-  );
-}
-
 function PreviewStage({
   preview,
   validatedRows,
@@ -389,7 +360,6 @@ function PreviewStage({
                   </div>
                 </div>
               </div>
-              <AttachmentCell customer={cust} metricCols={cols} rows={rows} />
             </div>
 
             {/* Groups */}
@@ -465,17 +435,17 @@ function ResultStage({ result, onReset }: { result: InvoiceUploadResult; onReset
       </div>
       {result.invoice_details.length > 0 && (
         <div>
-          <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">Invoices sent</h4>
+          <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">Invoices created</h4>
           <div className="rounded-xl border border-white/[0.07] overflow-hidden">
-            <div className="grid grid-cols-[5rem_minmax(0,2fr)_minmax(0,2fr)_5rem_5rem] px-4 py-2.5 border-b border-white/[0.06] text-[10px] font-semibold uppercase tracking-wide text-slate-500">
-              <span>Inv #</span><span>Customer</span><span>Group</span><span className="text-right">Amount</span><span className="text-center">Status</span>
+            <div className="grid grid-cols-[5rem_minmax(0,2fr)_minmax(0,2fr)_8rem_5rem] px-4 py-2.5 border-b border-white/[0.06] text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+              <span>Inv #</span><span>Customer</span><span>Group</span><span className="text-right">Delivery Date</span><span className="text-center">Status</span>
             </div>
             {result.invoice_details.map((d, i) => (
-              <div key={i} className="grid grid-cols-[5rem_minmax(0,2fr)_minmax(0,2fr)_5rem_5rem] px-4 py-2.5 border-b border-white/[0.04] last:border-0 items-center">
+              <div key={i} className="grid grid-cols-[5rem_minmax(0,2fr)_minmax(0,2fr)_8rem_5rem] px-4 py-2.5 border-b border-white/[0.04] last:border-0 items-center">
                 <span className="text-slate-400 text-xs font-mono truncate">{d.invoice_number ?? "—"}</span>
                 <span className="text-white text-sm truncate pr-2">{d.customer}</span>
                 <span className="text-slate-400 text-xs truncate pr-2">{d.group}</span>
-                <span className="text-slate-300 text-sm text-right">${d.total_amount.toFixed(2)}</span>
+                <span className="text-slate-300 text-xs text-right">{d.sent_at ? new Date(d.sent_at).toLocaleDateString("en-AU", { day: "2-digit", month: "short", year: "numeric" }) : "—"}</span>
                 <div className="flex justify-center"><SendStatusDot status={d.send_status} /></div>
               </div>
             ))}
@@ -528,18 +498,55 @@ function HistoryDetailModal({ uploadId, onClose }: { uploadId: number; onClose: 
           {error && <p className="text-rose-400 text-sm">{error}</p>}
           {data && (
             <>
-              <div className="grid grid-cols-3 gap-3">
-                {[{ label: "Total Invoices", value: data.total_invoices ?? 0 }, { label: "Succeeded", value: data.success_count ?? 0, color: "text-emerald-400" }, { label: "Failed", value: data.failed_count ?? 0, color: (data.failed_count ?? 0) > 0 ? "text-rose-400" : undefined }].map(({ label, value, color }) => (
+              {/* Stats */}
+              <div className="grid grid-cols-4 gap-3">
+                {[
+                  { label: "Total", value: data.total_invoices ?? 0 },
+                  { label: "Succeeded", value: data.success_count ?? 0, color: "text-emerald-400" },
+                  { label: "Failed", value: data.failed_count ?? 0, color: (data.failed_count ?? 0) > 0 ? "text-rose-400" : undefined },
+                ].map(({ label, value, color }) => (
                   <div key={label} className="rounded-xl bg-white/[0.03] border border-white/[0.06] px-4 py-3">
                     <p className="text-[11px] text-slate-500 uppercase tracking-wide">{label}</p>
                     <p className={`text-2xl font-bold mt-0.5 ${color ?? "text-white"}`}>{value}</p>
                   </div>
                 ))}
+                <div className="rounded-xl bg-white/[0.03] border border-white/[0.06] px-4 py-3 flex items-center">
+                  <StatusBadge status={data.status} />
+                </div>
               </div>
+
+              {/* Errors */}
               {data.errors.length > 0 && (
                 <ul className="space-y-1.5">
                   {data.errors.map((e, i) => <li key={i} className="text-xs text-amber-400/90 rounded-lg bg-amber-500/5 border border-amber-500/20 px-3 py-2">{e}</li>)}
                 </ul>
+              )}
+
+              {/* Invoice table */}
+              {data.generated_invoices.length > 0 && (
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-2">Invoices Created</p>
+                  <div className="rounded-xl border border-white/[0.07] overflow-hidden">
+                    <div className="grid grid-cols-[5rem_minmax(0,2fr)_minmax(0,1.5fr)_8rem_6rem] px-4 py-2.5 border-b border-white/[0.06] text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                      <span>INV #</span><span>Customer</span><span>Group</span><span className="text-right">Delivery Date</span><span className="text-right">Status</span>
+                    </div>
+                    <div className="divide-y divide-white/[0.04]">
+                      {data.generated_invoices.map((inv) => (
+                        <div key={inv.id} className="grid grid-cols-[5rem_minmax(0,2fr)_minmax(0,1.5fr)_8rem_6rem] px-4 py-2.5 items-center">
+                          <span className="text-slate-300 text-xs font-mono">{inv.invoice_number ?? "—"}</span>
+                          <span className="text-white text-sm truncate pr-3">{inv.customer_name ?? "—"}</span>
+                          <span className="text-slate-500 text-xs truncate pr-3">{inv.center_group_name}</span>
+                          <span className="text-slate-300 text-xs text-right">
+                            {inv.sent_at ? new Date(inv.sent_at).toLocaleDateString("en-AU", { day: "2-digit", month: "short", year: "numeric" }) : "—"}
+                          </span>
+                          <div className="flex justify-end">
+                            <SendStatusDot status={inv.send_status} />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
               )}
             </>
           )}
@@ -557,6 +564,7 @@ type Stage =
   | { type: "previewing"; validation: ValidationResponse }
   | { type: "preview"; preview: PreviewResponse; validatedRows: ValidatedRow[] }
   | { type: "submitting" }
+  | { type: "processing"; uploadId: number }
   | { type: "done"; result: InvoiceUploadResult };
 
 export default function ImportPage() {
@@ -612,14 +620,54 @@ export default function ImportPage() {
   const handleSubmit = async (req: GenerateRequest) => {
     setStage({ type: "submitting" });
     try {
-      const result = await apiGenerateInvoices(req);
-      setStage({ type: "done", result });
-      void apiGet<UploadHistoryRow[]>("/invoice-uploads").then(setHistory).catch(() => undefined);
+      const res = await apiGenerateInvoices(req);
+      addJob(res.upload_id);
+      setStage({ type: "processing", uploadId: res.upload_id });
     } catch (err) {
       alert(err instanceof Error ? err.message : "Generation failed");
       setStage({ type: "upload" });
     }
   };
+
+  // Poll the upload status while in processing stage
+  useEffect(() => {
+    if (stage.type !== "processing") return;
+    const uploadId = stage.uploadId;
+    const interval = setInterval(async () => {
+      try {
+        const detail = await apiGet<UploadDetailResponse>(`/invoice-uploads/${uploadId}`);
+        if (detail.status !== "processing") {
+          clearInterval(interval);
+          updateJob(uploadId, detail.status as "completed" | "completed_with_errors" | "failed");
+          // Convert UploadDetailResponse to InvoiceUploadResult shape
+          const result: InvoiceUploadResult = {
+            upload_id: detail.id,
+            status: detail.status,
+            total_center_rows: detail.total_invoices ?? 0,
+            centers_matched: 0,
+            centers_skipped: 0,
+            invoices_created: detail.success_count ?? 0,
+            invoices_failed: detail.failed_count ?? 0,
+            invoice_details: detail.generated_invoices.map((inv) => ({
+              customer: inv.customer_name ?? "",
+              group: inv.center_group_name,
+              qbo_invoice_id: inv.quickbooks_invoice_id ?? "",
+              invoice_number: inv.invoice_number,
+              sent_at: inv.sent_at,
+              send_status: inv.send_status,
+              sent: inv.send_status === "sent",
+            })),
+            errors: detail.errors,
+          };
+          setStage({ type: "done", result });
+          void apiGet<UploadHistoryRow[]>("/invoice-uploads").then(setHistory).catch(() => undefined);
+        }
+      } catch {
+        // keep polling on transient errors
+      }
+    }, 3000);
+    return () => clearInterval(interval);
+  }, [stage]);
 
   return (
     <div className="max-w-5xl mx-auto animate-fadeInUp">
@@ -673,7 +721,30 @@ export default function ImportPage() {
           {stage.type === "submitting" && (
             <div className="text-center py-16 text-slate-500 text-sm flex flex-col items-center gap-3">
               <svg className="w-6 h-6 animate-spin text-indigo-400" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9" /></svg>
-              Generating invoices…
+              Submitting…
+            </div>
+          )}
+
+          {stage.type === "processing" && (
+            <div className="rounded-2xl border border-indigo-500/20 bg-indigo-500/5 p-8 flex flex-col items-center gap-4 text-center">
+              <div className="w-14 h-14 rounded-2xl bg-indigo-500/15 border border-indigo-500/25 flex items-center justify-center">
+                <svg className="w-7 h-7 animate-spin text-indigo-400" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                  <path strokeLinecap="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9" />
+                </svg>
+              </div>
+              <div>
+                <p className="text-white font-semibold text-lg">Processing in background</p>
+                <p className="text-slate-400 text-sm mt-1">
+                  Your invoices are being created and sent in QBO. This may take a minute.
+                </p>
+                <p className="text-slate-500 text-xs mt-2">
+                  Job #{stage.uploadId} · Check the bell icon for updates
+                </p>
+              </div>
+              <div className="flex items-center gap-1.5 text-indigo-400 text-xs">
+                <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-pulse" />
+                Checking every 3 seconds…
+              </div>
             </div>
           )}
 

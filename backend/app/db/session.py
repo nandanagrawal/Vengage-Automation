@@ -34,7 +34,6 @@ def init_db() -> None:
     import app.models.center  # noqa: F401
     import app.models.customer  # noqa: F401
     import app.models.customer_type  # noqa: F401
-    import app.models.customer_attachment  # noqa: F401
     import app.models.customer_product_and_service  # noqa: F401
     import app.models.invoice  # noqa: F401
     import app.models.invoice_email_activity  # noqa: F401

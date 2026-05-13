@@ -2,16 +2,17 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
-import { qboConnectUrl, qboAuthDelete } from "@/lib/api";
+import { apiGet, qboConnectUrl, qboAuthDelete, type UploadDetailResponse } from "@/lib/api";
 import { useQboStatus } from "@/lib/useQboStatus";
 import { useAuth } from "@/lib/useAuth";
+import { getJobs, updateJob, markNotified, type BackgroundJob } from "@/lib/jobQueue";
 
 const pageMeta: Record<string, { title: string; subtitle: string }> = {
   "/dashboard": { title: "Dashboard",  subtitle: "Overview of your automation activity" },
   "/customers": { title: "Customers",  subtitle: "Manage and review customer records" },
-  "/invoices": { title: "Invoices", subtitle: "Group centers for invoice generation" },
+  "/invoices":  { title: "Configuration", subtitle: "Group centers for invoice generation" },
   "/import":    { title: "Import",     subtitle: "Upload and process invoice data" },
 };
 
@@ -28,10 +29,43 @@ export default function Navbar() {
   const pathname = usePathname();
   const meta = pageMeta[pathname] ?? { title: "Vengage", subtitle: "" };
   const [showDropdown, setShowDropdown] = useState(false);
+  const [showBell, setShowBell] = useState(false);
+  const [jobs, setJobs] = useState<BackgroundJob[]>([]);
   const { status } = useQboStatus();
   const { user, logout } = useAuth();
   const connected = status?.connected ?? false;
   const envLabel = (status?.environment ?? "sandbox").toLowerCase() === "sandbox" ? "Sandbox" : "Production";
+
+  // Poll background jobs every 4 seconds
+  useEffect(() => {
+    const poll = async () => {
+      const current = getJobs();
+      if (current.length === 0) { setJobs([]); return; }
+      const updated = [...current];
+      await Promise.all(
+        current
+          .filter((j) => j.status === "processing")
+          .map(async (j) => {
+            try {
+              const detail = await apiGet<UploadDetailResponse>(`/invoice-uploads/${j.uploadId}`);
+              if (detail.status !== "processing") {
+                updateJob(j.uploadId, detail.status as BackgroundJob["status"]);
+                const idx = updated.findIndex((x) => x.uploadId === j.uploadId);
+                if (idx !== -1) updated[idx] = { ...updated[idx], status: detail.status as BackgroundJob["status"] };
+              }
+            } catch { /* keep as processing */ }
+          }),
+      );
+      setJobs(updated);
+    };
+    void poll();
+    const id = setInterval(() => { void poll(); }, 4000);
+    return () => clearInterval(id);
+  }, []);
+
+  const processing = jobs.filter((j) => j.status === "processing").length;
+  const unnotified = jobs.filter((j) => j.status !== "processing" && !j.notified).length;
+  const bellBadge = processing > 0 ? processing : unnotified;
 
   async function disconnectQbo() {
     try {
@@ -104,11 +138,59 @@ export default function Navbar() {
           )}
         </div>
 
-        {/* Notifications */}
-        <button className="relative w-9 h-9 rounded-lg border border-white/[0.07] bg-white/[0.03] hover:bg-white/[0.07] text-slate-400 hover:text-white flex items-center justify-center transition-all">
-          <BellIcon />
-          <span className="absolute top-1.5 right-1.5 w-1.5 h-1.5 rounded-full bg-indigo-500" />
-        </button>
+        {/* Notifications bell */}
+        <div className="relative">
+          <button
+            onClick={() => { setShowBell((v) => !v); jobs.filter((j) => !j.notified && j.status !== "processing").forEach((j) => markNotified(j.uploadId)); }}
+            className="relative w-9 h-9 rounded-lg border border-white/[0.07] bg-white/[0.03] hover:bg-white/[0.07] text-slate-400 hover:text-white flex items-center justify-center transition-all"
+          >
+            <BellIcon />
+            {bellBadge > 0 && (
+              <span className={`absolute top-1 right-1 min-w-[16px] h-4 px-0.5 rounded-full text-[9px] font-bold flex items-center justify-center text-white ${processing > 0 ? "bg-indigo-500" : "bg-emerald-500"}`}>
+                {bellBadge}
+              </span>
+            )}
+          </button>
+
+          {showBell && (
+            <>
+              <div className="fixed inset-0 z-40" onClick={() => setShowBell(false)} />
+              <div className="absolute right-0 top-11 w-72 rounded-xl border border-white/[0.08] shadow-2xl z-50 overflow-hidden" style={{ background: "#0F1225" }}>
+                <div className="px-4 py-3 border-b border-white/[0.06]">
+                  <p className="text-white text-sm font-semibold">Background Jobs</p>
+                </div>
+                {jobs.length === 0 ? (
+                  <p className="px-4 py-6 text-slate-500 text-xs text-center">No background jobs</p>
+                ) : (
+                  <ul className="divide-y divide-white/[0.05] max-h-72 overflow-y-auto">
+                    {jobs.map((j) => (
+                      <li key={j.uploadId} className="px-4 py-3 flex items-center gap-3">
+                        {j.status === "processing" ? (
+                          <svg className="w-4 h-4 animate-spin text-indigo-400 shrink-0" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9" /></svg>
+                        ) : j.status === "completed" ? (
+                          <span className="w-4 h-4 shrink-0 text-emerald-400 text-base">✓</span>
+                        ) : j.status === "completed_with_errors" ? (
+                          <span className="w-4 h-4 shrink-0 text-amber-400 text-base">⚠</span>
+                        ) : (
+                          <span className="w-4 h-4 shrink-0 text-rose-400 text-base">✕</span>
+                        )}
+                        <div className="min-w-0">
+                          <p className="text-white text-xs font-medium">Job #{j.uploadId}</p>
+                          <p className={`text-[11px] capitalize ${j.status === "processing" ? "text-indigo-400" : j.status === "completed" ? "text-emerald-400" : j.status === "failed" ? "text-rose-400" : "text-amber-400"}`}>
+                            {j.status.replace(/_/g, " ")}
+                          </p>
+                        </div>
+                        {j.status !== "processing" && (
+                          <Link href="/import" onClick={() => setShowBell(false)} className="ml-auto text-indigo-400 text-[11px] hover:underline shrink-0">View</Link>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </>
+          )}
+        </div>
 
         {/* Avatar */}
         <div className="relative">

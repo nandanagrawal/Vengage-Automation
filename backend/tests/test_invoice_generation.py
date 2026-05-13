@@ -409,7 +409,7 @@ def test_zero_quantity_creates_invoice(db_session):
     assert line["Amount"] == 0.0
 
 
-def test_invoice_sent_after_creation(db_session):
+def test_invoice_created_as_draft(db_session):
     sc = _make_service_code(db_session, "SC-K")
     customer = _make_customer(db_session, "Send Co", qbo_id="qbo-send", email="send@send.com")
     _make_center(db_session, customer.id, "theta")
@@ -421,8 +421,11 @@ def test_invoice_sent_after_creation(db_session):
     result = generate_invoices(db_session, qbo, "tok", "realm", "f.csv", csv_bytes)
 
     assert result.invoices_created == 1
-    assert result.invoice_details[0].sent is True
-    assert qbo.invoices[0]["EmailStatus"] == "EmailSent"
+    detail = result.invoice_details[0]
+    assert detail.sent is False
+    assert detail.sent_at is None
+    assert detail.send_status == "pending"
+    assert qbo.invoices[0]["EmailStatus"] == "NotSet"
 
 
 def test_multiple_products_per_customer(db_session):
@@ -624,7 +627,7 @@ def test_db_records_persisted_when_upload_id_provided(db_session):
 
     gen_inv = db_session.query(GeneratedInvoice).filter(GeneratedInvoice.invoice_upload_id == upload.id).first()
     assert gen_inv is not None
-    assert gen_inv.send_status == "sent"
+    assert gen_inv.send_status == "pending"
     assert gen_inv.invoice_number.startswith("INV-")
     assert gen_inv.total_amount == Decimal("30.00")
 

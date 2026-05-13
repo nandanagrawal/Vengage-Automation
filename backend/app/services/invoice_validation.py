@@ -12,7 +12,6 @@ from app.models.customer import Customer
 from app.models.customer_product_and_service import CustomerProductAndService
 from app.models.invoice import Invoice
 from app.schemas.invoice_validation import (
-    AttachmentPreviewRequest,
     CustomerError,
     PreviewCenter,
     PreviewCustomer,
@@ -27,7 +26,6 @@ from app.services.invoice_generation import (
     _build_line_items_for_center,
     _invoice_date,
     _month_label,
-    generate_attachment_xlsx,
     parse_spreadsheet,
 )
 
@@ -288,62 +286,3 @@ def build_preview(body: RevalidateRequest, db: Session) -> PreviewResponse:
     )
 
 
-def generate_attachment_preview(body: AttachmentPreviewRequest, db: Session) -> bytes:
-    cust = db.query(Customer).filter(Customer.id == body.customer_id).first()
-    if not cust:
-        raise ValueError(f"Customer {body.customer_id} not found.")
-
-    parsed = _rows_to_parsed_file(body.rows, body.metric_columns)
-
-    center_ids_lower = list(parsed.rows.keys())
-    centers_in_db: list[Center] = (
-        db.query(Center)
-        .filter(sa_func.lower(Center.name).in_(center_ids_lower))
-        .all()
-    )
-    center_by_name: dict[str, Center] = {c.name.lower(): c for c in centers_in_db}
-
-    customer_services: list[CustomerProductAndService] = (
-        db.query(CustomerProductAndService)
-        .options(
-            selectinload(CustomerProductAndService.product_and_service),
-            selectinload(CustomerProductAndService.service_code),
-        )
-        .filter(CustomerProductAndService.customer_id == body.customer_id)
-        .all()
-    )
-    active_services = [
-        cs for cs in customer_services
-        if cs.product_and_service.active and cs.rate and cs.rate > 0
-    ]
-
-    inv_date = _invoice_date()
-    month_label = _month_label(inv_date)
-
-    from app.services.invoice_generation import _LineItem
-    all_line_items: list[_LineItem] = []
-    center_names: list[str] = []
-
-    for name_lower, metrics in parsed.rows.items():
-        ctr = center_by_name.get(name_lower)
-        if not ctr:
-            continue
-        prefix = parsed.center_prefixes.get(name_lower, name_lower)
-        items = _build_line_items_for_center(
-            center_prefix=prefix,
-            center_metrics=metrics,
-            customer_services=active_services,
-            month_label=month_label,
-        )
-        all_line_items.extend(items)
-        center_names.append(parsed.center_display_names.get(name_lower, name_lower))
-
-    return generate_attachment_xlsx(
-        customer=cust,
-        center_names=center_names,
-        center_by_name=center_by_name,
-        parsed=parsed,
-        line_items=all_line_items,
-        inv_date=inv_date,
-        inv_number=None,
-    )

@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
 
@@ -14,6 +15,16 @@ from app.services.qbo_sync import upsert_customer_from_qbo_id
 from app.services.qbo_tokens import get_valid_tokens_sync
 
 router = APIRouter()
+
+
+def _parse_qbo_datetime(value: str | None) -> datetime | None:
+    """Parse a QBO ISO-8601 datetime string into a UTC-aware datetime."""
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value).astimezone(timezone.utc)
+    except Exception:
+        return None
 
 
 def _upsert_invoice_from_qbo(db: Session, qbo: SupportsQuickBooks, qbo_invoice_id: str) -> None:
@@ -37,7 +48,12 @@ def _upsert_invoice_from_qbo(db: Session, qbo: SupportsQuickBooks, qbo_invoice_i
             customer_id = cust.id
 
     email_status = inv.get("EmailStatus", "NotSet")
-    send_status = "sent" if email_status == "EmailSent" else "pending"
+    is_sent = email_status == "EmailSent"
+    send_status = "sent" if is_sent else "pending"
+
+    # QBO provides DeliveryInfo.DeliveryTime when the invoice email was delivered
+    delivery_time_raw = ((inv.get("DeliveryInfo") or {}).get("DeliveryTime"))
+    sent_at: datetime | None = _parse_qbo_datetime(delivery_time_raw) if is_sent else None
 
     existing = (
         db.query(GeneratedInvoice)
@@ -46,9 +62,12 @@ def _upsert_invoice_from_qbo(db: Session, qbo: SupportsQuickBooks, qbo_invoice_i
     )
     if existing:
         existing.invoice_number = inv.get("DocNumber")
-        existing.total_amount = Decimal(str(inv.get("TotalAmt", 0)))
         existing.send_status = send_status
-        existing.customer_id = customer_id
+        # Only stamp sent_at the first time the invoice transitions to sent
+        if is_sent and existing.sent_at is None:
+            existing.sent_at = sent_at or datetime.now(timezone.utc)
+        if existing.customer_id is None:
+            existing.customer_id = customer_id
         db.add(existing)
     else:
         customer_name = (inv.get("CustomerRef") or {}).get("name", "")
@@ -61,6 +80,7 @@ def _upsert_invoice_from_qbo(db: Session, qbo: SupportsQuickBooks, qbo_invoice_i
             center_group_name=customer_name or "QBO",
             total_amount=Decimal(str(inv.get("TotalAmt", 0))),
             send_status=send_status,
+            sent_at=sent_at,
         )
         db.add(new_inv)
 

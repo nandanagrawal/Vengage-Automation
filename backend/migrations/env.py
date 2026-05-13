@@ -12,7 +12,6 @@ from app.models.base import Base
 import app.models.user  # noqa: F401
 import app.models.customer  # noqa: F401
 import app.models.product_and_service  # noqa: F401
-import app.models.customer_attachment  # noqa: F401
 import app.models.center  # noqa: F401
 import app.models.invoice  # noqa: F401
 import app.models.invoice_email_activity  # noqa: F401

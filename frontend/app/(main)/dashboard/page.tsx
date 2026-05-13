@@ -1,23 +1,32 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { apiGet, type DashboardStats, type InvoiceActivityRow } from "@/lib/api";
+import { apiGet, type DashboardStats, type RecentInvoiceRow } from "@/lib/api";
 import { ToastContainer, useToast } from "@/app/components/Toast";
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
 function emailStatusLabel(status: string) {
-  if (status === "EmailSent") return "Sent";
+  if (status === "EmailSent" || status === "sent") return "Sent";
   if (status === "NeedToSend") return "Queued";
-  if (status === "NotSet") return "Not set";
-  return status;
+  return "Created";
 }
 
 function emailStatusStyle(status: string) {
-  if (status === "EmailSent") return "text-emerald-400 bg-emerald-400/10 border-emerald-500/20";
-  if (status === "NeedToSend") return "text-amber-400 bg-amber-400/10 border-amber-500/20";
-  if (status === "NotSet") return "text-slate-500 bg-slate-500/10 border-slate-500/20";
-  return "text-blue-400 bg-blue-400/10 border-blue-500/20";
+  if (status === "EmailSent" || status === "sent")
+    return { dot: "bg-emerald-400", text: "text-emerald-400" };
+  if (status === "NeedToSend")
+    return { dot: "bg-amber-400", text: "text-amber-400" };
+  return { dot: "bg-indigo-400", text: "text-indigo-400" };
+}
+
+function formatDate(iso: string | null): string {
+  if (!iso) return "—";
+  try {
+    return new Date(iso).toLocaleDateString("en-GB", {
+      day: "2-digit", month: "short", year: "numeric",
+    });
+  } catch {
+    return "—";
+  }
 }
 
 function Spinner() {
@@ -27,8 +36,6 @@ function Spinner() {
     </svg>
   );
 }
-
-// ── Stat card ─────────────────────────────────────────────────────────────────
 
 type StatCardProps = {
   label: string;
@@ -68,7 +75,7 @@ function StatCard({ label, value, loading, icon, gradient, sub }: StatCardProps)
   );
 }
 
-// ── Page ──────────────────────────────────────────────────────────────────────
+const COLS = "grid-cols-[5rem_minmax(0,2fr)_minmax(0,2fr)_9rem_7rem_minmax(0,1.5fr)]";
 
 export default function DashboardPage() {
   const { toasts, push: pushToast, dismiss: dismissToast } = useToast();
@@ -76,8 +83,8 @@ export default function DashboardPage() {
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [statsLoading, setStatsLoading] = useState(true);
 
-  const [activity, setActivity] = useState<InvoiceActivityRow[]>([]);
-  const [activityLoading, setActivityLoading] = useState(true);
+  const [invoices, setInvoices] = useState<RecentInvoiceRow[]>([]);
+  const [invoicesLoading, setInvoicesLoading] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
@@ -95,12 +102,12 @@ export default function DashboardPage() {
 
     (async () => {
       try {
-        const rows = await apiGet<InvoiceActivityRow[]>("/activity/recent-invoices");
-        if (!cancelled) setActivity(rows);
+        const rows = await apiGet<RecentInvoiceRow[]>("/dashboard/recent-invoices");
+        if (!cancelled) setInvoices(rows);
       } catch (e) {
-        if (!cancelled) pushToast(e instanceof Error ? e.message : "Could not load activity");
+        if (!cancelled) pushToast(e instanceof Error ? e.message : "Could not load invoices");
       } finally {
-        if (!cancelled) setActivityLoading(false);
+        if (!cancelled) setInvoicesLoading(false);
       }
     })();
 
@@ -163,6 +170,8 @@ export default function DashboardPage() {
     },
   ];
 
+  const headers = ["INV #", "CUSTOMER", "GROUP", "DELIVERY DATE", "STATUS", "FILE NAME"];
+
   return (
     <div className="max-w-6xl mx-auto">
       <ToastContainer toasts={toasts} onDismiss={dismissToast} />
@@ -183,63 +192,73 @@ export default function DashboardPage() {
         ))}
       </div>
 
-      {/* Recent Activity */}
+      {/* Invoices Created table */}
       <div
         className="rounded-2xl border border-white/[0.07] overflow-hidden animate-fadeInUp"
         style={{ background: "var(--bg-card)", animationDelay: "0.25s" }}
       >
         <div className="flex items-center justify-between px-6 py-4 border-b border-white/[0.06]">
-          <h2 className="text-white font-semibold text-sm">Recent Activity</h2>
-          <span className="text-[11px] text-slate-600">Invoice emails · last 30 days · from QuickBooks</span>
+          <h2 className="text-white font-semibold text-sm tracking-wide uppercase">Invoices Created</h2>
+          <span className="text-[11px] text-slate-600">Last 50 · newest first</span>
         </div>
 
-        {activityLoading && (
-          <div className="px-6 py-8 flex items-center justify-center gap-2 text-slate-600 text-sm">
-            <Spinner />
-            Loading activity…
+        {/* Header row */}
+        <div className={`grid ${COLS} px-5 py-2.5 border-b border-white/[0.05] max-md:hidden`}>
+          {headers.map((h) => (
+            <span key={h} className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">{h}</span>
+          ))}
+        </div>
+
+        {invoicesLoading && (
+          <div className="px-6 py-10 flex items-center justify-center gap-2 text-slate-600 text-sm">
+            <Spinner /> Loading…
           </div>
         )}
 
-        {!activityLoading && activity.length === 0 && (
-          <div className="px-6 py-8 text-center text-slate-600 text-sm">
-            No invoice email rows yet — connect QuickBooks and press Sync on Customers.
+        {!invoicesLoading && invoices.length === 0 && (
+          <div className="px-6 py-10 text-center text-slate-600 text-sm">
+            No invoices yet — upload a file in Import to generate invoices.
           </div>
         )}
 
-        {!activityLoading && activity.length > 0 && (
+        {!invoicesLoading && invoices.length > 0 && (
           <div className="divide-y divide-white/[0.04]">
-            {activity.map((row, i) => (
-              <div
-                key={`${row.invoice_number}-${i}`}
-                className="flex items-center justify-between px-6 py-3.5 hover:bg-white/[0.03] transition-colors"
-              >
-                <div className="flex items-center gap-3 min-w-0">
-                  <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-indigo-500/20 to-violet-600/20 border border-indigo-500/20 flex items-center justify-center text-indigo-400 text-xs font-bold shrink-0">
-                    {row.customer_display_name[0]?.toUpperCase() ?? "?"}
-                  </div>
-                  <div className="min-w-0">
-                    <p className="text-white text-sm font-medium truncate">{row.customer_display_name}</p>
-                    <p className="text-slate-600 text-xs font-mono">{row.invoice_number}</p>
-                  </div>
-                </div>
-                <div className="flex items-center gap-3 shrink-0">
-                  <span
-                    className={`text-[11px] font-semibold px-2.5 py-0.5 rounded-full border ${emailStatusStyle(row.email_status)}`}
-                  >
-                    {emailStatusLabel(row.email_status)}
+            {invoices.map((row) => {
+              const style = emailStatusStyle(row.send_status);
+              return (
+                <div
+                  key={row.id}
+                  className={`grid ${COLS} px-5 py-3 items-center hover:bg-white/[0.03] transition-colors max-md:flex max-md:flex-col max-md:gap-1 max-md:py-3`}
+                >
+                  {/* INV # */}
+                  <span className="text-slate-400 text-xs font-mono">{row.invoice_number ?? "—"}</span>
+
+                  {/* CUSTOMER */}
+                  <span className="text-white text-sm truncate">{row.customer_name ?? "—"}</span>
+
+                  {/* GROUP */}
+                  <span className="text-indigo-300/80 text-xs truncate">{row.group}</span>
+
+                  {/* DELIVERY DATE */}
+                  <span className="text-slate-400 text-xs tabular-nums">{formatDate(row.sent_at)}</span>
+
+                  {/* STATUS */}
+                  <span className={`flex items-center gap-1.5 text-xs font-medium ${style.text}`}>
+                    <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${style.dot}`} />
+                    {emailStatusLabel(row.send_status)}
                   </span>
-                  {row.txn_date && (
-                    <span className="text-slate-600 text-xs tabular-nums">{row.txn_date}</span>
-                  )}
+
+                  {/* FILE NAME */}
+                  <span className="text-slate-500 text-xs truncate">{row.file_name ?? "—"}</span>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
 
-        {!activityLoading && activity.length > 0 && (
+        {!invoicesLoading && invoices.length > 0 && (
           <div className="px-6 py-3 border-t border-white/[0.06]">
-            <span className="text-slate-600 text-xs">{activity.length} row{activity.length !== 1 ? "s" : ""}</span>
+            <span className="text-slate-600 text-xs">{invoices.length} invoice{invoices.length !== 1 ? "s" : ""}</span>
           </div>
         )}
       </div>

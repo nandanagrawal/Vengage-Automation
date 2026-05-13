@@ -73,35 +73,6 @@ export async function apiDelete<T>(path: string): Promise<T> {
   return text ? (JSON.parse(text) as T) : ({} as T);
 }
 
-export async function apiUpload<T>(path: string, files: File[]): Promise<T> {
-  const form = new FormData();
-  files.forEach((f) => form.append("files", f));
-  const r = await fetch(`${API_V1_BASE}${path}`, {
-    method: "POST",
-    headers: authHeaders(),
-    body: form,
-  });
-  await assertOk(r);
-  return r.json() as Promise<T>;
-}
-
-export async function apiDownloadBlob(path: string): Promise<Blob> {
-  const r = await fetch(`${API_V1_BASE}${path}`, {
-    headers: authHeaders(),
-  });
-  await assertOk(r);
-  return r.blob();
-}
-
-export function downloadBlobAsFile(blob: Blob, filename: string) {
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  a.click();
-  URL.revokeObjectURL(url);
-}
-
 export async function qboAuthGet<T>(path: string): Promise<T> {
   const p = path.startsWith("/") ? path : `/${path}`;
   const r = await fetch(`${API_ORIGIN}${QBO_AUTH_PREFIX}${p}`, {
@@ -131,21 +102,6 @@ export function qboConnectUrl(): string {
 // ── Types ──────────────────────────────────────────────────────────────────
 
 export type CustomerStatus = "pending" | "approved" | "rejected";
-
-export type UploadAttachmentsResult = {
-  attachments: CustomerAttachmentRow[];
-  errors: string[];
-};
-
-export type CustomerAttachmentRow = {
-  id: number;
-  customer_id: number;
-  original_filename: string;
-  content_type: string;
-  size_bytes: number;
-  qbo_attachable_id: string | null;
-  created_at: string;
-};
 
 export type CustomerRow = {
   id: number;
@@ -262,7 +218,6 @@ export type SyncResult = {
   customers_pushed: number;
   customers_created_remote: number;
   invoice_activity_rows: number;
-  attachments_pruned: number;
   items_upserted: number;
   items_removed_local: number;
   message: string;
@@ -280,7 +235,7 @@ export type InvoiceUploadDetail = {
   group: string;
   qbo_invoice_id: string;
   invoice_number: string | null;
-  total_amount: number;
+  sent_at: string | null;
   send_status: string;
   sent: boolean;
 };
@@ -296,16 +251,6 @@ export type InvoiceUploadResult = {
   invoice_details: InvoiceUploadDetail[];
   errors: string[];
 };
-
-export async function apiPostBlob(path: string, body: unknown): Promise<Blob> {
-  const r = await fetch(`${API_V1_BASE}${path}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", ...authHeaders() },
-    body: JSON.stringify(body),
-  });
-  await assertOk(r);
-  return r.blob();
-}
 
 export async function apiUploadInvoiceFile(file: File): Promise<InvoiceUploadResult> {
   const form = new FormData();
@@ -349,7 +294,7 @@ export type GeneratedInvoiceRow = {
   quickbooks_invoice_id: string | null;
   customer_name: string | null;
   center_group_name: string;
-  total_amount: string;
+  sent_at: string | null;
   send_status: string;
   error_message: string | null;
   centers: GeneratedInvoiceCenterRow[];
@@ -376,6 +321,16 @@ export type DashboardStats = {
   delivery_failures: number;
   pending_customers: number;
   approved_customers: number;
+};
+
+export type RecentInvoiceRow = {
+  id: number;
+  invoice_number: string | null;
+  customer_name: string | null;
+  group: string;
+  sent_at: string | null;
+  send_status: string;
+  file_name: string | null;
 };
 
 // ── Invoice validation / multi-step flow ──────────────────────────────────────
@@ -462,48 +417,10 @@ export async function apiPreview(
   return apiPost<PreviewResponse>("/invoice-uploads/preview", { metric_columns, rows });
 }
 
-export async function apiDownloadAttachmentPreview(
-  customer_id: number,
-  metric_columns: string[],
-  rows: ValidatedRow[],
-): Promise<Blob> {
-  return apiPostBlob("/invoice-uploads/attachment-preview", { customer_id, metric_columns, rows });
-}
+export type GenerateJobResponse = { upload_id: number; status: string };
 
-export async function apiGenerateInvoices(req: GenerateRequest): Promise<InvoiceUploadResult> {
-  return apiPost<InvoiceUploadResult>("/invoice-uploads/generate", req);
-}
-
-export type GeneratedInvoiceItem = {
-  id: number;
-  invoice_number: string | null;
-  quickbooks_invoice_id: string | null;
-  customer_id: number | null;
-  customer_name: string | null;
-  center_group_name: string;
-  total_amount: string;
-  send_status: string;
-  source: string;
-  error_message: string | null;
-  created_at: string;
-  centers: { id: number; center_name: string }[];
-  line_items: { id: number; product_name: string; quantity: string; rate: string; amount: string }[];
-};
-
-export type GeneratedInvoiceListResponse = {
-  total: number;
-  items: GeneratedInvoiceItem[];
-};
-
-export async function apiGetGeneratedInvoices(
-  params?: { customer_id?: number; limit?: number; offset?: number },
-): Promise<GeneratedInvoiceListResponse> {
-  const qs = new URLSearchParams();
-  if (params?.customer_id != null) qs.set("customer_id", String(params.customer_id));
-  if (params?.limit != null) qs.set("limit", String(params.limit));
-  if (params?.offset != null) qs.set("offset", String(params.offset));
-  const q = qs.toString();
-  return apiGet<GeneratedInvoiceListResponse>(`/generated-invoices${q ? `?${q}` : ""}`);
+export async function apiGenerateInvoices(req: GenerateRequest): Promise<GenerateJobResponse> {
+  return apiPost<GenerateJobResponse>("/invoice-uploads/generate", req);
 }
 
 export type AuthToken = { access_token: string; token_type: string };

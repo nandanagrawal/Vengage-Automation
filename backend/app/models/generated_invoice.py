@@ -26,6 +26,7 @@ class GeneratedInvoice(Base):
     center_group_name: Mapped[str] = mapped_column(String(500), nullable=False)
     total_amount: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False, default=0)
     send_status: Mapped[str] = mapped_column(String(50), nullable=False, default="pending")
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(

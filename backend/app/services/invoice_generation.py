@@ -326,7 +326,7 @@ class InvoiceDetail:
     group_description: str
     qbo_invoice_id: str
     invoice_number: str | None
-    total_amount: float
+    sent_at: str | None
     send_status: str
 
     @property
@@ -357,7 +357,7 @@ class GenerationResult:
                     "group": d.group_description,
                     "qbo_invoice_id": d.qbo_invoice_id,
                     "invoice_number": d.invoice_number,
-                    "total_amount": d.total_amount,
+                    "sent_at": d.sent_at,
                     "send_status": d.send_status,
                     "sent": d.sent,
                 }
@@ -611,91 +611,6 @@ def generate_invoices(
     )
 
 
-def generate_attachment_xlsx(
-    customer: Customer,
-    center_names: list[str],
-    center_by_name: dict[str, Center],
-    parsed: ParsedFile,
-    line_items: list[_LineItem],
-    inv_date: date,
-    inv_number: str | None,
-) -> bytes:
-    """Build a 2-sheet XLSX for attaching to the customer's invoice email."""
-    try:
-        import openpyxl
-    except ImportError as exc:
-        raise RuntimeError("openpyxl is required for attachment generation.") from exc
-
-    wb = openpyxl.Workbook()
-
-    # ── Sheet 1: RAW Data-Imaging ──────────────────────────────────────────────
-    ws1 = wb.active
-    ws1.title = "RAW Data-Imaging"
-    ws1.append(["S.No.", "Center Name", "Center Prefix"] + list(parsed.metric_columns))
-    for cname in center_names:
-        name_lower = cname.lower()
-        metrics = parsed.rows.get(name_lower, {})
-        prefix = parsed.center_prefixes.get(name_lower, cname)
-        row: list[Any] = [cname, cname, prefix] + [
-            float(metrics.get(mc.lower(), Decimal("0")))
-            for mc in parsed.metric_columns
-        ]
-        ws1.append(row)
-
-    # ── Sheet 2: Invoice Data ──────────────────────────────────────────────────
-    ws2 = wb.create_sheet("Invoice Data")
-
-    due = _due_date(inv_date)
-    memo = _memo(inv_date)
-    month_label = _month_label(inv_date)
-
-    if inv_date.month == 1:
-        prev_month_date = date(inv_date.year - 1, 12, 1)
-    else:
-        prev_month_date = date(inv_date.year, inv_date.month - 1, 1)
-    prev_month_label = prev_month_date.strftime("%b%y").upper()
-
-    # Metadata rows
-    ws2.append(["System Last Invoice No", inv_number or ""])
-    ws2.append(["Invoice Date", inv_date])
-    ws2.append(["Memo", memo])
-    ws2.append(["Month", memo])
-    ws2.append(["SAAS : Olivia Core Booking", "B0001"])
-    ws2.append(["SAAS : Olivia Misc. Items (ex. call forwarding, additional SMS, direct calls)", "B0002"])
-    ws2.append(["SAAS : Ereferral Services", "B0003"])
-    ws2.append(["Olivia Implementation", "B0004"])
-    ws2.append(["Development Services", "B0005"])
-    ws2.append(["Preread Services", "B0006"])
-    ws2.append(["Previous Month", prev_month_label])
-    ws2.append([])
-    ws2.append([
-        "*InvoiceNo", "*Customer", "*InvoiceDate", "*DueDate", "Terms", "ServiceDate", "Memo",
-        "*Item(Product/Service)", "ItemDescription", "ItemQuantity", "ItemRate",
-        "*ItemAmount", "Item Tax Amount", "*Item Tax Code",
-    ])
-
-    first = True
-    for li in line_items:
-        tax_amount = round(float(li.amount) * 0.1, 10)
-        if first:
-            ws2.append([
-                inv_number or "", customer.display_name, inv_date, due, "Net 15", inv_date, memo,
-                li.product_name, li.description,
-                float(li.quantity), float(li.rate), float(li.amount), tax_amount, "GST",
-            ])
-            first = False
-        else:
-            ws2.append([
-                None, None, None, None, None, inv_date, None,
-                li.product_name, li.description,
-                float(li.quantity), float(li.rate), float(li.amount), tax_amount, "GST",
-            ])
-
-    buf = io.BytesIO()
-    wb.save(buf)
-    return buf.getvalue()
-
-
 def _create_and_send(
     db: Session,
     qbo: SupportsQuickBooks,
@@ -771,42 +686,10 @@ def _create_and_send(
         if gen_inv is not None:
             gen_inv.quickbooks_invoice_id = inv_id
             gen_inv.invoice_number = inv_number
-
-        if customer.add_attachment_in_mail:
-            try:
-                xlsx_bytes = generate_attachment_xlsx(
-                    customer=customer,
-                    center_names=center_names,
-                    center_by_name=center_by_name,
-                    parsed=parsed,
-                    line_items=line_items,
-                    inv_date=inv_date,
-                    inv_number=inv_number,
-                )
-                safe_inv = (inv_number or inv_id).replace("/", "-")
-                qbo.attach_to_invoice(
-                    access_token=access_token,
-                    realm_id=realm_id,
-                    invoice_id=inv_id,
-                    filename=f"Invoice_{safe_inv}.xlsx",
-                    content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    file_bytes=xlsx_bytes,
-                )
-            except Exception as attach_err:
-                result.errors.append(f"Invoice {inv_id}: failed to attach XLS — {attach_err}")
-
-        send_status = "failed"
-        send_error: str | None = None
-        try:
-            qbo.send_invoice(access_token, realm_id, inv_id, customer.primary_email or None)
-            send_status = "sent"
-        except Exception as send_err:
-            send_error = str(send_err)
-            result.errors.append(f"Invoice {inv_id} created but failed to send: {send_err}")
+            db.commit()  # Commit QBO ID immediately so any concurrent webhook sees this record
 
         if gen_inv is not None:
-            gen_inv.send_status = send_status
-            gen_inv.error_message = send_error
+            gen_inv.send_status = "pending"
 
         result.invoices_created += 1
         result.invoice_details.append(
@@ -815,8 +698,8 @@ def _create_and_send(
                 group_description=label,
                 qbo_invoice_id=inv_id,
                 invoice_number=inv_number,
-                total_amount=float(total_amount),
-                send_status=send_status,
+                sent_at=None,
+                send_status="pending",
             )
         )
     except Exception as err:

@@ -62,14 +62,6 @@ class PreviewResponse(BaseModel):
     warnings: list[str] = []
 
 
-# ── Attachment preview + generate ─────────────────────────────────────────────
-
-class AttachmentPreviewRequest(BaseModel):
-    customer_id: int
-    metric_columns: list[str]
-    rows: list[ValidatedRow]   # only rows belonging to this customer's centers
-
-
 class GenerateRequest(BaseModel):
     metric_columns: list[str]
     rows: list[ValidatedRow]

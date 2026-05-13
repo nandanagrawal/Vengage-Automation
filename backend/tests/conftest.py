@@ -10,8 +10,6 @@ from fastapi.testclient import TestClient
 _fd, _TEST_DB_PATH = tempfile.mkstemp(suffix="-vengage-test.db")
 os.close(_fd)
 os.environ["DATABASE_URL"] = f"sqlite:///{_TEST_DB_PATH}"
-_ATTACH_DIR = tempfile.mkdtemp(prefix="vengage-test-attach-")
-os.environ["CUSTOMER_ATTACHMENTS_DIR"] = _ATTACH_DIR
 os.environ["QBO_ACCESS_TOKEN"] = "test-token"
 os.environ["QBO_REALM_ID"] = "test-realm"
 os.environ["JWT_SECRET"] = "test-secret-for-pytest-only"
@@ -29,7 +27,6 @@ from app.db.session import SessionLocal, init_db  # noqa: E402
 init_db()
 from app.models.center import Center  # noqa: E402
 from app.models.customer import Customer  # noqa: E402
-from app.models.customer_attachment import CustomerAttachment  # noqa: E402
 from app.models.customer_product_and_service import CustomerProductAndService  # noqa: E402
 from app.models.customer_type import CustomerType  # noqa: E402
 from app.models.generated_invoice import GeneratedInvoice, GeneratedInvoiceCenter, GeneratedInvoiceLineItem  # noqa: E402
@@ -51,8 +48,6 @@ class FakeQBO:
         self.items: list[dict] = []
         self._next_id = 100
         self._next_attach_id = 1
-        # customer QBO id -> attachable records (mirrors QBO query by customer)
-        self.attachables_by_customer: dict[str, list[dict]] = {}
 
     def base_url(self) -> str:
         return "https://example.test"
@@ -94,18 +89,8 @@ class FakeQBO:
     def query_invoice_email_rows(self, access_token, realm_id, since) -> list[dict]:
         return list(self.invoices)
 
-    def query_attachables_for_customer(self, access_token, realm_id, customer_qbo_id: str) -> list[dict]:
-        return list(self.attachables_by_customer.get(str(customer_qbo_id), []))
-
     def query_items(self, access_token: str, realm_id: str) -> list[dict]:
         return list(self.items)
-
-    def upload_attachment(self, access_token, realm_id, customer_id, filename, content_type, file_bytes):
-        aid = f"att-{self._next_attach_id}"
-        self._next_attach_id += 1
-        rec = {"Id": aid, "FileName": filename}
-        self.attachables_by_customer.setdefault(str(customer_id), []).append(rec)
-        return {"Attachable": {"Id": aid, "FileName": filename}}
 
     def create_invoice(self, access_token: str, realm_id: str, payload: dict) -> dict:
         self._next_id += 1
@@ -168,7 +153,6 @@ def reset_db():
     db.query(InvoiceUpload).delete()
     db.query(Invoice).delete()
     db.query(InvoiceEmailActivity).delete()
-    db.query(CustomerAttachment).delete()
     db.query(CustomerProductAndService).delete()
     db.query(ProductAndService).delete()
     db.query(ServiceCode).delete()

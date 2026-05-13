@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_current_user
 from app.db.session import get_db
 from app.models.customer import Customer
+from app.models.generated_invoice import GeneratedInvoice
 from app.models.invoice_email_activity import InvoiceEmailActivity
 from app.models.invoice_upload import InvoiceUpload
 from app.models.user import User
@@ -73,3 +74,46 @@ def get_dashboard_stats(
         pending_customers=pending_customers,
         approved_customers=approved_customers,
     )
+
+
+class RecentInvoiceRow(BaseModel):
+    id: int
+    invoice_number: str | None
+    customer_name: str | None
+    group: str
+    sent_at: str | None
+    send_status: str
+    file_name: str | None
+
+
+@router.get("/dashboard/recent-invoices", response_model=list[RecentInvoiceRow])
+def get_recent_invoices(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    limit: int = 50,
+):
+    rows = (
+        db.query(GeneratedInvoice)
+        .order_by(GeneratedInvoice.id.desc())
+        .limit(limit)
+        .all()
+    )
+
+    customer_ids = [r.customer_id for r in rows if r.customer_id]
+    upload_ids = [r.invoice_upload_id for r in rows if r.invoice_upload_id]
+
+    customers = {c.id: c.display_name for c in db.query(Customer).filter(Customer.id.in_(customer_ids)).all()} if customer_ids else {}
+    uploads = {u.id: u.file_name for u in db.query(InvoiceUpload).filter(InvoiceUpload.id.in_(upload_ids)).all()} if upload_ids else {}
+
+    return [
+        RecentInvoiceRow(
+            id=r.id,
+            invoice_number=r.invoice_number,
+            customer_name=customers.get(r.customer_id) if r.customer_id else None,
+            group=r.center_group_name or "—",
+            sent_at=r.sent_at.isoformat() if r.sent_at else None,
+            send_status=r.send_status or "pending",
+            file_name=uploads.get(r.invoice_upload_id) if r.invoice_upload_id else None,
+        )
+        for r in rows
+    ]

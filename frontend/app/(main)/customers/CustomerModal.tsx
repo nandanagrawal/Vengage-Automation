@@ -1,9 +1,9 @@
 "use client";
 
 import type { FormEvent, ReactNode } from "react";
-import { useEffect, useMemo, useRef, useState } from "react";
-import type { CenterRow, CustomerAttachmentRow, CustomerRow, CustomerTypeRow, ProductAndServiceRow, ServiceCodeRow } from "@/lib/api";
-import { apiDelete, apiDownloadBlob, apiGet, apiPatch, apiPost, downloadBlobAsFile } from "@/lib/api";
+import { useEffect, useMemo, useState } from "react";
+import type { CenterRow, CustomerRow, CustomerTypeRow, ProductAndServiceRow, ServiceCodeRow } from "@/lib/api";
+import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 
 type CenterLine = { key: string; id?: number; name: string };
 
@@ -145,14 +145,6 @@ function Section({
   );
 }
 
-function FileIcon() {
-  return (
-    <svg className="w-4 h-4 text-slate-500" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
-      <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
-    </svg>
-  );
-}
-
 export function CustomerModal({
   open,
   onClose,
@@ -163,17 +155,12 @@ export function CustomerModal({
 }: {
   open: boolean;
   onClose: () => void;
-  onSubmit: (payload: Record<string, unknown>, files: File[]) => Promise<CustomerRow>;
+  onSubmit: (payload: Record<string, unknown>) => Promise<CustomerRow>;
   submitting: boolean;
   mode?: "create" | "edit";
   customer?: CustomerRow;
 }) {
   const [form, setForm] = useState<CustomerFormValues>(emptyForm);
-  const [files, setFiles] = useState<File[]>([]);
-  const [existingAttachments, setExistingAttachments] = useState<CustomerAttachmentRow[]>([]);
-  const [attachmentsLoading, setAttachmentsLoading] = useState(false);
-  const [attachmentsLoadError, setAttachmentsLoadError] = useState<string | null>(null);
-  const [dragOver, setDragOver] = useState(false);
   const [openName, setOpenName] = useState(true);
   const [openAddr, setOpenAddr] = useState(true);
   const [openNotes, setOpenNotes] = useState(true);
@@ -195,8 +182,6 @@ export function CustomerModal({
   const [creatingType, setCreatingType] = useState(false);
   const [createTypeError, setCreateTypeError] = useState<string | null>(null);
 
-  const fileInputRef = useRef<HTMLInputElement>(null);
-
   useEffect(() => {
     if (!open) return;
     if (mode === "edit" && customer) {
@@ -215,9 +200,6 @@ export function CustomerModal({
       setSelectedCustomerTypeIds([]);
       setServiceRows([]);
     }
-    setFiles([]);
-    setExistingAttachments([]);
-    setAttachmentsLoadError(null);
     setCenterLines([]);
     setPendingDeleteIds([]);
     setCentersLoadError(null);
@@ -257,23 +239,6 @@ export function CustomerModal({
     return () => { cancelled = true; };
   }, [open]);
 
-  useEffect(() => {
-    if (!open || mode !== "edit" || !customer?.id) {
-      setExistingAttachments([]);
-      setAttachmentsLoadError(null);
-      setAttachmentsLoading(false);
-      return;
-    }
-    let cancelled = false;
-    setAttachmentsLoading(true);
-    setAttachmentsLoadError(null);
-    void apiGet<CustomerAttachmentRow[]>(`/customers/${customer.id}/attachments`)
-      .then((rows) => { if (!cancelled) setExistingAttachments(rows); })
-      .catch((e) => { if (!cancelled) setAttachmentsLoadError(e instanceof Error ? e.message : "Failed to load attachments"); })
-      .finally(() => { if (!cancelled) setAttachmentsLoading(false); });
-    return () => { cancelled = true; };
-  }, [open, mode, customer?.id]);
-
   const displayPreview = useMemo(() => {
     const parts = [form.title, form.given_name, form.middle_name, form.family_name, form.suffix].filter(Boolean);
     return parts.join(" ").trim() || form.company_name || "";
@@ -281,15 +246,6 @@ export function CustomerModal({
 
   const update = <K extends keyof CustomerFormValues>(key: K, v: CustomerFormValues[K]) =>
     setForm((s) => ({ ...s, [key]: v }));
-
-  const addFiles = (incoming: File[]) => {
-    setFiles((prev) => {
-      const existing = new Set(prev.map((f) => f.name + f.size));
-      return [...prev, ...incoming.filter((f) => !existing.has(f.name + f.size))];
-    });
-  };
-
-  const removeFile = (idx: number) => setFiles((fs) => fs.filter((_, i) => i !== idx));
 
   const removeCenterLine = (line: CenterLine) => {
     if (line.id) setPendingDeleteIds((p) => [...p, line.id!]);
@@ -312,9 +268,6 @@ export function CustomerModal({
 
   const resetAndClose = () => {
     setForm(emptyForm());
-    setFiles([]);
-    setExistingAttachments([]);
-    setAttachmentsLoadError(null);
     setCenterLines([]);
     setPendingDeleteIds([]);
     setCentersLoadError(null);
@@ -380,7 +333,7 @@ export function CustomerModal({
     };
 
     try {
-      const savedCustomer = await onSubmit(payload, files);
+      const savedCustomer = await onSubmit(payload);
       const cid = savedCustomer.id;
       try {
         for (const did of pendingDeleteIds) {
@@ -495,7 +448,7 @@ export function CustomerModal({
           </Section>
 
           <Section
-            title="Company centers"
+            title="Centers"
             open={openCenters}
             onToggle={() => setOpenCenters(!openCenters)}
             icon={<span className="text-sky-400">⌁</span>}
@@ -603,93 +556,10 @@ export function CustomerModal({
             )}
           </Section>
 
-          {/* ── Notes & Attachments ── */}
-          <Section title="Notes and attachments" open={openNotes} onToggle={() => setOpenNotes(!openNotes)} icon={<span className="text-amber-400">✎</span>}>
+          {/* ── Notes ── */}
+          <Section title="Notes" open={openNotes} onToggle={() => setOpenNotes(!openNotes)} icon={<span className="text-amber-400">✎</span>}>
             <label className={labelCls()}>Notes</label>
-            <textarea rows={3} className={`${fieldCls()} resize-y mb-4`} value={form.notes} onChange={(e) => update("notes", e.target.value)} />
-
-            {mode === "edit" && customer?.id && (
-              <div className="mb-4">
-                <p className={labelCls()}>Saved on this platform</p>
-                {attachmentsLoading && <p className="text-xs text-slate-600 py-2">Loading attachments…</p>}
-                {attachmentsLoadError && <p className="text-xs text-rose-400 py-1">{attachmentsLoadError}</p>}
-                {!attachmentsLoading && !attachmentsLoadError && (
-                  <p className="text-[11px] text-slate-600 mb-2">
-                    Deletions in QuickBooks are removed here after you run <span className="text-slate-400">Sync</span> on
-                    the customers page.
-                  </p>
-                )}
-                {!attachmentsLoading && !attachmentsLoadError && existingAttachments.length === 0 && (
-                  <p className="text-xs text-slate-600 py-1">
-                    No files stored yet. Upload below — we keep a copy here and send to QuickBooks.
-                  </p>
-                )}
-                {existingAttachments.length > 0 && (
-                  <ul className="mt-2 space-y-1.5">
-                    {existingAttachments.map((a) => (
-                      <li
-                        key={a.id}
-                        className="flex items-center justify-between gap-2 py-1.5 px-3 rounded-lg bg-white/[0.04] border border-white/[0.06]"
-                      >
-                        <div className="flex items-center gap-2 min-w-0">
-                          <FileIcon />
-                          <span className="text-sm text-slate-300 truncate">{a.original_filename}</span>
-                          <span className="text-xs text-slate-600 shrink-0">
-                            {a.size_bytes < 1024 ? `${a.size_bytes} B` : `${(a.size_bytes / 1024).toFixed(0)} KB`}
-                          </span>
-                        </div>
-                        <button
-                          type="button"
-                          className="text-xs font-medium text-indigo-400 hover:text-indigo-300 shrink-0"
-                          onClick={async () => {
-                            try {
-                              const blob = await apiDownloadBlob(
-                                `/customers/${customer.id}/attachments/${a.id}/file`,
-                              );
-                              downloadBlobAsFile(blob, a.original_filename);
-                            } catch { /* ignore */ }
-                          }}
-                        >
-                          Download
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-            )}
-
-            <p className={labelCls()}>Upload files (QuickBooks + local copy)</p>
-            <div
-              className={`rounded-xl border-2 border-dashed px-4 py-6 text-center cursor-pointer transition-colors ${dragOver ? "border-indigo-500/60 bg-indigo-500/5" : "border-white/[0.12] hover:border-indigo-500/40 hover:bg-white/[0.02]"}`}
-              onClick={() => fileInputRef.current?.click()}
-              onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
-              onDragLeave={() => setDragOver(false)}
-              onDrop={(e) => { e.preventDefault(); setDragOver(false); addFiles(Array.from(e.dataTransfer.files)); }}
-            >
-              <svg className="w-7 h-7 mx-auto mb-2 text-slate-600" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5" />
-              </svg>
-              <p className="text-sm text-slate-400">Drag & drop files here, or <span className="text-indigo-400 underline">browse</span></p>
-              <p className="text-xs text-slate-600 mt-1">PDFs, images, spreadsheets — stored here and attached in QuickBooks</p>
-              {mode === "create" && <p className="text-xs text-slate-700 mt-1">Files upload after customer is approved in QBO</p>}
-              <input ref={fileInputRef} type="file" multiple className="hidden" onChange={(e) => { addFiles(Array.from(e.target.files ?? [])); e.target.value = ""; }} />
-            </div>
-
-            {files.length > 0 && (
-              <div className="mt-3 space-y-1.5">
-                {files.map((f, i) => (
-                  <div key={i} className="flex items-center justify-between py-1.5 px-3 rounded-lg bg-white/[0.04] border border-white/[0.06]">
-                    <div className="flex items-center gap-2 min-w-0">
-                      <FileIcon />
-                      <span className="text-sm text-slate-300 truncate">{f.name}</span>
-                      <span className="text-xs text-slate-600 shrink-0">{f.size < 1024 ? `${f.size} B` : `${(f.size / 1024).toFixed(0)} KB`}</span>
-                    </div>
-                    <button type="button" onClick={() => removeFile(i)} className="text-slate-600 hover:text-red-400 transition-colors ml-2 text-sm">✕</button>
-                  </div>
-                ))}
-              </div>
-            )}
+            <textarea rows={3} className={`${fieldCls()} resize-y`} value={form.notes} onChange={(e) => update("notes", e.target.value)} />
           </Section>
 
           {/* ── App fields ── */}

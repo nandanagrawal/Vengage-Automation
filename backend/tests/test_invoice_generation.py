@@ -579,13 +579,14 @@ def test_upload_endpoint_rejects_bad_extension(admin_client):
     assert r.status_code == 422
 
 
-def test_upload_endpoint_requires_admin(supervisor_client):
+def test_upload_endpoint_accessible_by_supervisor(supervisor_client):
+    # Supervisors are now allowed to import files; QBO not connected → 503
     csv_bytes = _make_raw_csv([("x", {"Gardening": 1})], ["Gardening"])
     r = supervisor_client.post(
         "/api/v1/invoice-uploads",
         files={"file": ("data.csv", csv_bytes, "text/csv")},
     )
-    assert r.status_code == 403
+    assert r.status_code == 503  # QBO not connected, not 401/403
 
 
 def test_upload_endpoint_csv_no_qbo(admin_client):

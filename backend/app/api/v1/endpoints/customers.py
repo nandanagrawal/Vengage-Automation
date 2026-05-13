@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import update as sqla_update
 from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import get_current_user, get_qbo_client, require_admin
@@ -39,11 +40,15 @@ def _get_customer_or_404(db: Session, customer_id: int) -> Customer:
 
 
 def _push_to_qbo(db: Session, row: Customer, qbo: SupportsQuickBooks) -> None:
-    """Push a customer to QBO; sets qbo_id on the row. No-op if QBO not connected."""
+    """Push a customer to QBO; sets qbo_id on the row.
+
+    No-op if QBO is not connected (RuntimeError from ensure_qbo_credentials).
+    Raises the original exception if the QBO API call itself fails — callers must handle it.
+    """
     try:
         token, realm = ensure_qbo_credentials()
     except RuntimeError:
-        return
+        return  # QBO not connected — silently skip
 
     payload = customer_model_to_qbo_payload(row)
 
@@ -97,16 +102,20 @@ def post_customer(
         raise HTTPException(status_code=422, detail=str(e)) from e
 
     if current_user.role == UserRole.admin:
-        # Admin → immediately approved, push to QBO
+        # Push to QBO first (status still pending); only approve after a successful push.
+        # If QBO is not connected, _push_to_qbo returns silently and we still approve.
+        try:
+            _push_to_qbo(db, row, qbo)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=f"QuickBooks sync failed: {exc}. Customer was not approved.",
+            ) from exc
         row.status = CustomerStatus.approved
         row.approved_by_id = current_user.id
         db.add(row)
         db.commit()
         db.refresh(row)
-        try:
-            _push_to_qbo(db, row, qbo)
-        except Exception:
-            pass
     # Supervisor → status stays pending, no QBO push until admin approves
 
     row = _get_customer_or_404(db, row.id)
@@ -144,12 +153,17 @@ def patch_customer(
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e)) from e
 
-    # Only push changes to QBO if customer is already approved
+    # Only push changes to QBO if customer is already approved.
+    # Local changes are always committed first; a push failure returns 502
+    # with a message clarifying that the local edit was saved.
     if row.status == CustomerStatus.approved:
         try:
             _push_to_qbo(db, row, qbo)
-        except Exception:
-            pass
+        except Exception as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Customer updated locally, but QuickBooks sync failed: {exc}",
+            ) from exc
 
     row = _get_customer_or_404(db, customer_id)
     return customer_response_from_row(row)
@@ -181,15 +195,30 @@ def approve_customer(
         raise HTTPException(status_code=409, detail=f"Customer is already {row.status.value}")
 
     if body.action == "approve":
-        row.status = CustomerStatus.approved
-        row.approved_by_id = admin.id
-        db.add(row)
-        db.commit()
-        db.refresh(row)
+        # Push to QBO first; only flip status to approved if the push succeeds.
+        # If QBO is not connected, _push_to_qbo returns silently and we still approve.
         try:
             _push_to_qbo(db, row, qbo)
-        except Exception:
-            pass
+        except Exception as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=f"QuickBooks sync failed: {exc}. Customer status unchanged.",
+            ) from exc
+
+        # Atomic status flip: UPDATE WHERE status='pending' so that a concurrent
+        # request that also passed the initial check cannot double-approve.
+        result = db.execute(
+            sqla_update(Customer)
+            .where(Customer.id == customer_id, Customer.status == CustomerStatus.pending)
+            .values(status=CustomerStatus.approved, approved_by_id=admin.id)
+            .execution_options(synchronize_session=False)
+        )
+        db.commit()
+        if result.rowcount == 0:
+            raise HTTPException(
+                status_code=409,
+                detail="Customer was already approved by a concurrent request",
+            )
     else:
         row.status = CustomerStatus.rejected
         row.approved_by_id = admin.id

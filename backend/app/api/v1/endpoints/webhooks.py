@@ -1,3 +1,8 @@
+import base64
+import hashlib
+import hmac
+import json
+import logging
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
@@ -13,6 +18,14 @@ from app.models.generated_invoice import GeneratedInvoice
 from app.services.qbo_client import SupportsQuickBooks
 from app.services.qbo_sync import upsert_customer_from_qbo_id
 from app.services.qbo_tokens import get_valid_tokens_sync
+
+_logger = logging.getLogger(__name__)
+
+if not settings.INTUIT_WEBHOOK_VERIFIER_TOKEN:
+    _logger.warning(
+        "INTUIT_WEBHOOK_VERIFIER_TOKEN is not set — "
+        "all Intuit webhook requests will be rejected until it is configured"
+    )
 
 router = APIRouter()
 
@@ -99,13 +112,30 @@ async def intuit_webhook(
     - Invoice create/update → fetch & upsert into generated_invoices with source="quickbooks".
     """
     verifier = settings.INTUIT_WEBHOOK_VERIFIER_TOKEN
-    if verifier:
-        sig = request.headers.get("intuit-signature") or request.headers.get("Intuit-Signature")
-        if not sig or sig.strip() != verifier.strip():
-            raise HTTPException(status_code=401, detail="Invalid webhook verification")
+    if not verifier:
+        raise HTTPException(
+            status_code=503,
+            detail="Webhook endpoint is disabled: INTUIT_WEBHOOK_VERIFIER_TOKEN is not configured.",
+        )
+
+    # Read raw body first — needed for HMAC verification AND JSON parsing.
+    # Intuit signs the raw request body with HMAC-SHA256 using the verifier token as key,
+    # then base64-encodes the digest and sends it as the intuit-signature header.
+    raw_body = await request.body()
+
+    sig = request.headers.get("intuit-signature") or request.headers.get("Intuit-Signature")
+    if not sig:
+        raise HTTPException(status_code=401, detail="Missing intuit-signature header")
+
+    expected = base64.b64encode(
+        hmac.new(verifier.encode("utf-8"), raw_body, hashlib.sha256).digest()
+    ).decode("utf-8")
+
+    if not hmac.compare_digest(sig.strip(), expected):
+        raise HTTPException(status_code=401, detail="Invalid webhook signature")
 
     try:
-        payload: dict[str, Any] = await request.json()
+        payload: dict[str, Any] = json.loads(raw_body) if raw_body else {}
     except Exception:
         payload = {}
 

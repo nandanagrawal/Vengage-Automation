@@ -1,5 +1,9 @@
 """Shared test fixtures — SQLite in-memory DB, FakeQBO, auth helpers."""
 
+import base64
+import hashlib
+import hmac
+import json
 import os
 import tempfile
 
@@ -13,6 +17,7 @@ os.environ["DATABASE_URL"] = f"sqlite:///{_TEST_DB_PATH}"
 os.environ["QBO_ACCESS_TOKEN"] = "test-token"
 os.environ["QBO_REALM_ID"] = "test-realm"
 os.environ["JWT_SECRET"] = "test-secret-for-pytest-only"
+os.environ["INTUIT_WEBHOOK_VERIFIER_TOKEN"] = "test-webhook-token"
 
 _tf = tempfile.NamedTemporaryFile(prefix="vengage-test-qbo-", suffix=".json", delete=False)
 _tf.close()
@@ -47,7 +52,6 @@ class FakeQBO:
         self.invoices: list[dict] = []
         self.items: list[dict] = []
         self._next_id = 100
-        self._next_attach_id = 1
 
     def base_url(self) -> str:
         return "https://example.test"
@@ -106,11 +110,6 @@ class FakeQBO:
                 return inv
         return {"Id": invoice_id, "EmailStatus": "EmailSent"}
 
-    def attach_to_invoice(self, access_token, realm_id, invoice_id, filename, content_type, file_bytes) -> dict:
-        aid = f"inv-att-{self._next_attach_id}"
-        self._next_attach_id += 1
-        return {"Attachable": {"Id": aid, "FileName": filename}}
-
     def get_invoice(self, access_token: str, realm_id: str, invoice_id: str) -> dict:
         return {"Id": invoice_id, "DocNumber": f"INV-{invoice_id}", "TotalAmt": 0.0, "EmailStatus": "NotSet", "CustomerRef": {"value": "fake"}}
 
@@ -119,6 +118,22 @@ class FakeQBO:
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
+_WEBHOOK_TOKEN = os.environ["INTUIT_WEBHOOK_VERIFIER_TOKEN"]
+
+
+def webhook_post(client, body: dict):
+    """POST to the Intuit webhook endpoint with a valid HMAC-SHA256 signature."""
+    raw = json.dumps(body).encode("utf-8")
+    sig = base64.b64encode(
+        hmac.new(_WEBHOOK_TOKEN.encode("utf-8"), raw, hashlib.sha256).digest()
+    ).decode("utf-8")
+    return client.post(
+        "/api/v1/webhooks/intuit",
+        content=raw,
+        headers={"Content-Type": "application/json", "intuit-signature": sig},
+    )
+
 
 def make_user(db, email: str, role: UserRole, full_name: str = "") -> User:
     u = User(

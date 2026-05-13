@@ -2,7 +2,7 @@
 
 import pytest
 
-from tests.conftest import token_for
+from tests.conftest import token_for, webhook_post
 from app.models.user import UserRole
 
 _BASE = {
@@ -118,23 +118,6 @@ def test_sync_does_not_push_pending_customers(admin_client, supervisor_client, f
     assert pending["qbo_id"] is None
 
 
-def test_sync_pulls_invoice_email_activity(admin_client, fake_qbo):
-    fake_qbo.invoices = [{
-        "Id": "9001",
-        "DocNumber": "VNG-9001",
-        "CustomerRef": {"value": "55", "name": "Remote Co"},
-        "EmailStatus": "EmailSent",
-        "TxnDate": "2026-05-02",
-    }]
-    body = admin_client.post("/api/v1/sync/quickbooks").json()
-    assert body["invoice_activity_rows"] == 1
-
-    act = admin_client.get("/api/v1/activity/recent-invoices").json()
-    assert act[0]["invoice_number"] == "VNG-9001"
-    assert act[0]["email_status"] == "EmailSent"
-    assert act[0]["customer_display_name"] == "Remote Co"
-
-
 # ── Webhook ───────────────────────────────────────────────────────────────────
 
 def test_webhook_creates_customer_as_approved(client, fake_qbo):
@@ -144,7 +127,7 @@ def test_webhook_creates_customer_as_approved(client, fake_qbo):
         "SyncToken": "0",
         "MetaData": {"LastUpdatedTime": "2026-04-01T08:00:00+00:00"},
     }]
-    r = client.post("/api/v1/webhooks/intuit", json={
+    r = webhook_post(client, {
         "eventNotifications": [{
             "dataChangeEvent": {
                 "entities": [{"name": "Customer", "id": "77", "operation": "Create"}]
@@ -164,8 +147,7 @@ def test_webhook_creates_customer_as_approved(client, fake_qbo):
 
 
 def test_webhook_invoice_entity_processed(client):
-    # Invoice events are now processed (upserted into generated_invoices)
-    r = client.post("/api/v1/webhooks/intuit", json={
+    r = webhook_post(client, {
         "eventNotifications": [{
             "dataChangeEvent": {
                 "entities": [{"name": "Invoice", "id": "1", "operation": "Create"}]
@@ -177,7 +159,7 @@ def test_webhook_invoice_entity_processed(client):
 
 
 def test_webhook_unknown_entity_ignored(client):
-    r = client.post("/api/v1/webhooks/intuit", json={
+    r = webhook_post(client, {
         "eventNotifications": [{
             "dataChangeEvent": {
                 "entities": [{"name": "Payment", "id": "1", "operation": "Create"}]

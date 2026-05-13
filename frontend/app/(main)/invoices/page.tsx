@@ -8,7 +8,7 @@ import { ToastContainer, useToast } from "@/app/components/Toast";
 // ── Styles ────────────────────────────────────────────────────────────────────
 
 function fieldCls() {
-  return "w-full rounded-lg bg-[#1a1d2e] border border-white/[0.08] px-3 py-2 text-sm text-white placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-indigo-500/40";
+  return "w-full rounded-lg bg-white border border-gray-200 px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-200";
 }
 
 type SortKey = "id" | "customer" | "title" | "centers";
@@ -17,8 +17,8 @@ type SortDir = "asc" | "desc";
 function SortIcon({ active, dir }: { active: boolean; dir: SortDir }) {
   return (
     <span className={`ml-1 inline-flex flex-col leading-none`}>
-      <span className={`text-[8px] leading-none ${active && dir === "asc" ? "text-indigo-400" : "text-slate-700"}`}>▲</span>
-      <span className={`text-[8px] leading-none ${active && dir === "desc" ? "text-indigo-400" : "text-slate-700"}`}>▼</span>
+      <span className={`text-[8px] leading-none ${active && dir === "asc" ? "text-indigo-600" : "text-gray-300"}`}>▲</span>
+      <span className={`text-[8px] leading-none ${active && dir === "desc" ? "text-indigo-600" : "text-gray-300"}`}>▼</span>
     </span>
   );
 }
@@ -446,15 +446,15 @@ function InvoicesPageContent() {
 
       {/* ── Edit modal ── */}
       {editInvoice && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
-          <div className="w-full max-w-lg rounded-2xl border border-white/[0.1] shadow-2xl" style={{ background: "var(--bg-deep)" }}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/30 backdrop-blur-sm">
+          <div className="w-full max-w-lg rounded-2xl border border-gray-200 shadow-2xl" style={{ background: "var(--bg-deep)" }}>
             {/* Header */}
-            <div className="flex items-center justify-between px-6 py-4 border-b border-white/[0.08]">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
               <div>
-                <h2 className="text-base font-bold text-white">Edit grouping #{editInvoice.id}</h2>
-                <p className="text-xs text-slate-500 mt-0.5">{companyLabel(editInvoice.company_id)}</p>
+                <h2 className="text-base font-bold text-gray-900">Edit grouping #{editInvoice.id}</h2>
+                <p className="text-xs text-gray-400 mt-0.5">{companyLabel(editInvoice.company_id)}</p>
               </div>
-              <button type="button" onClick={() => setEditInvoice(null)} className="text-slate-400 hover:text-white transition-colors">
+              <button type="button" onClick={() => setEditInvoice(null)} className="text-gray-500 hover:text-gray-900 transition-colors">
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
                 </svg>
@@ -465,11 +465,11 @@ function InvoicesPageContent() {
 
               {/* Centers */}
               <div>
-                <label className="block text-[11px] font-semibold uppercase tracking-wide text-slate-500 mb-1.5">
-                  Centers <span className="normal-case text-slate-600">(at least one required)</span>
+                <label className="block text-[11px] font-semibold uppercase tracking-wide text-gray-400 mb-1.5">
+                  Centers <span className="normal-case text-gray-400">(at least one required)</span>
                 </label>
                 {editCentersLoading && (
-                  <p className="text-xs text-slate-600 py-2 flex items-center gap-1.5">
+                  <p className="text-xs text-gray-400 py-2 flex items-center gap-1.5">
                     <svg className="w-3 h-3 animate-spin" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9" />
                     </svg>
@@ -477,16 +477,16 @@ function InvoicesPageContent() {
                   </p>
                 )}
                 {!editCentersLoading && editCenters.length === 0 && (
-                  <p className="text-xs text-amber-400/90 py-2">No centers found for this company.</p>
+                  <p className="text-xs text-amber-700/90 py-2">No centers found for this company.</p>
                 )}
                 {editCenters.length > 0 && (
-                  <ul className="rounded-lg border border-white/[0.08] bg-white/[0.02] px-3 py-2 space-y-2 max-h-52 overflow-y-auto">
+                  <ul className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 space-y-2 max-h-52 overflow-y-auto">
                     {editCenters.map((c) => {
                       const usedInv = editCenterUsedInInvoiceId.get(c.id);
                       const disabled = usedInv !== undefined;
                       return (
                         <li key={c.id}>
-                          <label className={`flex items-center gap-2.5 text-sm ${disabled ? "cursor-not-allowed opacity-50" : "cursor-pointer text-slate-300"}`}>
+                          <label className={`flex items-center gap-2.5 text-sm ${disabled ? "cursor-not-allowed opacity-50" : "cursor-pointer text-gray-600"}`}>
                             <input
                               type="checkbox"
                               className="rounded border-white/20 disabled:opacity-40"
@@ -495,7 +495,7 @@ function InvoicesPageContent() {
                               onChange={() => toggleEditCenter(c.id)}
                             />
                             <span>{c.name}</span>
-                            {disabled && <span className="text-[10px] text-slate-600 uppercase tracking-wide ml-1">in grouping #{usedInv}</span>}
+                            {disabled && <span className="text-[10px] text-gray-400 uppercase tracking-wide ml-1">in grouping #{usedInv}</span>}
                           </label>
                         </li>
                       );
@@ -503,13 +503,13 @@ function InvoicesPageContent() {
                   </ul>
                 )}
                 {editSelectedIds.length > 0 && (
-                  <p className="text-xs text-indigo-400 mt-1.5">{editSelectedIds.length} center{editSelectedIds.length !== 1 ? "s" : ""} selected</p>
+                  <p className="text-xs text-indigo-600 mt-1.5">{editSelectedIds.length} center{editSelectedIds.length !== 1 ? "s" : ""} selected</p>
                 )}
               </div>
 
               {/* Title */}
               <div>
-                <label className="block text-[11px] font-semibold uppercase tracking-wide text-slate-500 mb-1.5">Title (optional)</label>
+                <label className="block text-[11px] font-semibold uppercase tracking-wide text-gray-400 mb-1.5">Title (optional)</label>
                 <input
                   className={fieldCls()}
                   value={editTitle}
@@ -520,11 +520,11 @@ function InvoicesPageContent() {
               </div>
 
               <div className="flex justify-end gap-3 pt-1">
-                <button type="button" onClick={() => setEditInvoice(null)} className="px-4 py-2 rounded-xl text-sm text-slate-400 hover:text-white transition-colors">Cancel</button>
+                <button type="button" onClick={() => setEditInvoice(null)} className="px-4 py-2 rounded-xl text-sm text-gray-500 hover:text-gray-900 transition-colors">Cancel</button>
                 <button
                   type="submit"
                   disabled={editSaving || editSelectedIds.length === 0}
-                  className="shimmer-btn px-5 py-2.5 rounded-xl text-white text-sm font-semibold disabled:opacity-50"
+                  className="shimmer-btn px-5 py-2.5 rounded-xl text-gray-900 text-sm font-semibold disabled:opacity-50"
                 >
                   {editSaving ? "Saving…" : "Save changes"}
                 </button>
@@ -536,14 +536,14 @@ function InvoicesPageContent() {
 
       {/* Page header */}
       <div className="mb-6">
-        <h1 className="text-2xl font-bold text-white tracking-tight">Configuration</h1>
-        <p className="text-slate-500 text-sm mt-1">
+        <h1 className="text-2xl font-bold text-gray-900 tracking-tight">Configuration</h1>
+        <p className="text-gray-400 text-sm mt-1">
           Manage invoice groupings and customer type classifications.
         </p>
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-1 mb-6 p-1 rounded-xl border border-white/[0.07] w-fit" style={{ background: "var(--bg-card)" }}>
+      <div className="flex gap-1 mb-6 p-1 rounded-xl border border-gray-200 w-fit" style={{ background: "var(--bg-card)" }}>
         {(["grouping", "listing", "customer_type", "service_code"] as const).map((tab) => (
           <button
             key={tab}
@@ -551,8 +551,8 @@ function InvoicesPageContent() {
             onClick={() => setActiveTab(tab)}
             className={`px-5 py-2 rounded-lg text-sm font-semibold transition-colors ${
               activeTab === tab
-                ? "bg-indigo-600 text-white shadow"
-                : "text-slate-400 hover:text-white"
+                ? "bg-indigo-600 text-gray-900 shadow"
+                : "text-gray-500 hover:text-gray-900"
             }`}
           >
             {tab === "grouping"
@@ -570,19 +570,19 @@ function InvoicesPageContent() {
       {activeTab === "grouping" && (
         <form
           onSubmit={(e) => void onCreateInvoice(e)}
-          className="rounded-2xl border border-white/[0.07] p-6 space-y-5"
+          className="rounded-2xl border border-gray-200 p-6 space-y-5"
           style={{ background: "var(--bg-card)" }}
         >
           <div>
-            <h2 className="text-sm font-semibold text-white">New invoice grouping</h2>
-            <p className="text-[11px] text-slate-600 mt-0.5">
-              Open from <span className="text-slate-500">Customers</span> via the grid icon on a row to pre-select that company.
+            <h2 className="text-sm font-semibold text-gray-900">New invoice grouping</h2>
+            <p className="text-[11px] text-gray-400 mt-0.5">
+              Open from <span className="text-gray-400">Customers</span> via the grid icon on a row to pre-select that company.
             </p>
           </div>
 
           {/* Company select */}
           <div>
-            <label className="block text-[11px] font-semibold uppercase tracking-wide text-slate-500 mb-1.5">Company</label>
+            <label className="block text-[11px] font-semibold uppercase tracking-wide text-gray-400 mb-1.5">Company</label>
             <div className="relative">
               <select
                 value={companyId === "" ? "" : String(companyId)}
@@ -592,18 +592,18 @@ function InvoicesPageContent() {
                   setSelectedCenterIds([]);
                 }}
                 required
-                className="w-full rounded-lg border border-white/[0.08] px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-indigo-500/40 appearance-none pr-8"
-                style={{ background: "#1a1d2e" }}
+                className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-indigo-200 appearance-none pr-8"
+                style={{ background: "white" }}
               >
-                <option value="" style={{ background: "#1a1d2e", color: "#94a3b8" }}>Select customer…</option>
+                <option value="" style={{ background: "white", color: "var(--text-4)" }}>Select customer…</option>
                 {customers.map((c) => (
-                  <option key={c.id} value={c.id} style={{ background: "#1a1d2e", color: "#f1f5f9" }}>
+                  <option key={c.id} value={c.id} style={{ background: "white", color: "var(--text-1)" }}>
                     {c.display_name}
                   </option>
                 ))}
               </select>
               {/* chevron */}
-              <svg className="absolute right-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500 pointer-events-none" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+              <svg className="absolute right-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
               </svg>
             </div>
@@ -611,12 +611,12 @@ function InvoicesPageContent() {
 
           {/* Centers */}
           <div>
-            <label className="block text-[11px] font-semibold uppercase tracking-wide text-slate-500 mb-1.5">
-              Centers <span className="normal-case text-slate-600">(select one or more — unavailable if already grouped)</span>
+            <label className="block text-[11px] font-semibold uppercase tracking-wide text-gray-400 mb-1.5">
+              Centers <span className="normal-case text-gray-400">(select one or more — unavailable if already grouped)</span>
             </label>
-            {companyId === "" && <p className="text-xs text-slate-600 py-2">Choose a company to load centers.</p>}
+            {companyId === "" && <p className="text-xs text-gray-400 py-2">Choose a company to load centers.</p>}
             {companyId !== "" && centersLoading && (
-              <p className="text-xs text-slate-600 py-2 flex items-center gap-1.5">
+              <p className="text-xs text-gray-400 py-2 flex items-center gap-1.5">
                 <svg className="w-3 h-3 animate-spin" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9" />
                 </svg>
@@ -624,16 +624,16 @@ function InvoicesPageContent() {
               </p>
             )}
             {companyId !== "" && !centersLoading && centers.length === 0 && (
-              <p className="text-xs text-amber-400/90 py-2">No centers yet — add them on the customer record first.</p>
+              <p className="text-xs text-amber-700/90 py-2">No centers yet — add them on the customer record first.</p>
             )}
             {centers.length > 0 && (
-              <ul className="rounded-lg border border-white/[0.08] bg-white/[0.02] px-3 py-2 space-y-2 max-h-52 overflow-y-auto">
+              <ul className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 space-y-2 max-h-52 overflow-y-auto">
                 {centers.map((c) => {
                   const usedInv = centerUsedInInvoiceId.get(c.id);
                   const disabled = usedInv !== undefined;
                   return (
                     <li key={c.id}>
-                      <label className={`flex items-center gap-2.5 text-sm ${disabled ? "cursor-not-allowed opacity-50" : "cursor-pointer text-slate-300"}`}>
+                      <label className={`flex items-center gap-2.5 text-sm ${disabled ? "cursor-not-allowed opacity-50" : "cursor-pointer text-gray-600"}`}>
                         <input
                           type="checkbox"
                           className="rounded border-white/20 disabled:opacity-40"
@@ -642,7 +642,7 @@ function InvoicesPageContent() {
                           onChange={() => toggleCenter(c.id)}
                         />
                         <span>{c.name}</span>
-                        {disabled && <span className="text-[10px] text-slate-600 uppercase tracking-wide ml-1">in grouping #{usedInv}</span>}
+                        {disabled && <span className="text-[10px] text-gray-400 uppercase tracking-wide ml-1">in grouping #{usedInv}</span>}
                       </label>
                     </li>
                   );
@@ -653,7 +653,7 @@ function InvoicesPageContent() {
 
           {/* Title */}
           <div>
-            <label className="block text-[11px] font-semibold uppercase tracking-wide text-slate-500 mb-1.5">Title (optional)</label>
+            <label className="block text-[11px] font-semibold uppercase tracking-wide text-gray-400 mb-1.5">Title (optional)</label>
             <input
               className={fieldCls()}
               value={title}
@@ -666,7 +666,7 @@ function InvoicesPageContent() {
           <button
             type="submit"
             disabled={saving || companyId === "" || selectedCenterIds.length === 0}
-            className="shimmer-btn px-5 py-2.5 rounded-xl text-white text-sm font-semibold disabled:opacity-50"
+            className="shimmer-btn px-5 py-2.5 rounded-xl text-gray-900 text-sm font-semibold disabled:opacity-50"
           >
             {saving ? "Saving…" : "Save invoice grouping"}
           </button>
@@ -679,10 +679,10 @@ function InvoicesPageContent() {
           {/* Add new type form */}
           <form
             onSubmit={(e) => void onCreateCustomerType(e)}
-            className="rounded-2xl border border-white/[0.07] p-5 space-y-4"
+            className="rounded-2xl border border-gray-200 p-5 space-y-4"
             style={{ background: "var(--bg-card)" }}
           >
-            <h2 className="text-sm font-semibold text-white">Add customer type</h2>
+            <h2 className="text-sm font-semibold text-gray-900">Add customer type</h2>
             <div className="flex gap-3">
               <input
                 className={`${fieldCls()} flex-1`}
@@ -694,7 +694,7 @@ function InvoicesPageContent() {
               <button
                 type="submit"
                 disabled={ctCreating || !ctNewName.trim()}
-                className="shimmer-btn px-5 py-2 rounded-xl text-white text-sm font-semibold disabled:opacity-50 shrink-0"
+                className="shimmer-btn px-5 py-2 rounded-xl text-gray-900 text-sm font-semibold disabled:opacity-50 shrink-0"
               >
                 {ctCreating ? "Adding…" : "Add"}
               </button>
@@ -702,26 +702,26 @@ function InvoicesPageContent() {
           </form>
 
           {/* List */}
-          <div className="rounded-2xl border border-white/[0.07] overflow-hidden" style={{ background: "var(--bg-card)" }}>
+          <div className="rounded-2xl border border-gray-200 overflow-hidden" style={{ background: "var(--bg-card)" }}>
             {/* Header */}
-            <div className="grid grid-cols-[minmax(0,1fr)_6rem_7rem] px-5 py-3 border-b border-white/[0.06]">
-              <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">Name</span>
-              <span className="text-xs font-semibold uppercase tracking-wider text-slate-500 text-center">Status</span>
-              <span className="text-xs font-semibold uppercase tracking-wider text-slate-500 text-center">Actions</span>
+            <div className="grid grid-cols-[minmax(0,1fr)_6rem_7rem] px-5 py-3 border-b border-gray-200">
+              <span className="text-xs font-semibold uppercase tracking-wider text-gray-400">Name</span>
+              <span className="text-xs font-semibold uppercase tracking-wider text-gray-400 text-center">Status</span>
+              <span className="text-xs font-semibold uppercase tracking-wider text-gray-400 text-center">Actions</span>
             </div>
 
             {ctLoading && (
-              <p className="px-5 py-8 text-center text-slate-500 text-sm">Loading…</p>
+              <p className="px-5 py-8 text-center text-gray-400 text-sm">Loading…</p>
             )}
 
             {!ctLoading && customerTypes.length === 0 && (
-              <p className="px-5 py-8 text-center text-slate-500 text-sm">
+              <p className="px-5 py-8 text-center text-gray-400 text-sm">
                 No customer types yet. Add one above.
               </p>
             )}
 
             {!ctLoading && customerTypes.length > 0 && (
-              <ul className="divide-y divide-white/[0.04]">
+              <ul className="divide-y divide-gray-100">
                 {customerTypes.map((ct) => (
                   <li
                     key={ct.id}
@@ -733,7 +733,7 @@ function InvoicesPageContent() {
                         <form onSubmit={(e) => void onSaveCtEdit(e)} className="flex gap-2">
                           <input
                             autoFocus
-                            className="flex-1 rounded-lg bg-[#1a1d2e] border border-white/[0.08] px-2 py-1 text-sm text-white focus:outline-none focus:ring-2 focus:ring-indigo-500/40"
+                            className="flex-1 rounded-lg bg-white border border-gray-200 px-2 py-1 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-indigo-200"
                             value={ctEditName}
                             onChange={(e) => setCtEditName(e.target.value)}
                             maxLength={255}
@@ -741,20 +741,20 @@ function InvoicesPageContent() {
                           <button
                             type="submit"
                             disabled={ctEditSaving || !ctEditName.trim()}
-                            className="text-xs text-indigo-400 hover:text-indigo-300 font-semibold disabled:opacity-50"
+                            className="text-xs text-indigo-600 hover:text-indigo-600 font-semibold disabled:opacity-50"
                           >
                             {ctEditSaving ? "…" : "Save"}
                           </button>
                           <button
                             type="button"
                             onClick={() => setCtEditId(null)}
-                            className="text-xs text-slate-500 hover:text-white"
+                            className="text-xs text-gray-400 hover:text-gray-900"
                           >
                             Cancel
                           </button>
                         </form>
                       ) : (
-                        <span className={`text-sm font-medium ${ct.status ? "text-white" : "text-slate-500 line-through"}`}>
+                        <span className={`text-sm font-medium ${ct.status ? "text-gray-900" : "text-gray-400 line-through"}`}>
                           {ct.name}
                         </span>
                       )}
@@ -768,8 +768,8 @@ function InvoicesPageContent() {
                         onClick={() => void onToggleCtStatus(ct)}
                         className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-semibold transition-colors ${
                           ct.status
-                            ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 hover:bg-emerald-500/20"
-                            : "bg-slate-700/40 text-slate-500 border border-white/[0.06] hover:bg-slate-700/60"
+                            ? "bg-emerald-500/10 text-emerald-700 border border-emerald-500/20 hover:bg-emerald-500/20"
+                            : "bg-slate-700/40 text-gray-400 border border-gray-200 hover:bg-slate-700/60"
                         }`}
                       >
                         <span className={`w-1.5 h-1.5 rounded-full ${ct.status ? "bg-emerald-400" : "bg-slate-500"}`} />
@@ -784,7 +784,7 @@ function InvoicesPageContent() {
                         title="Edit name"
                         onClick={() => { setCtEditId(ct.id); setCtEditName(ct.name); }}
                         disabled={ctEditId !== null}
-                        className="p-1.5 rounded-lg text-slate-500 hover:text-indigo-400 hover:bg-indigo-500/10 transition-colors disabled:opacity-30"
+                        className="p-1.5 rounded-lg text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 transition-colors disabled:opacity-30"
                       >
                         <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931z" />
@@ -795,7 +795,7 @@ function InvoicesPageContent() {
                         title="Delete"
                         disabled={ctDeletingId === ct.id}
                         onClick={() => void onDeleteCustomerType(ct.id)}
-                        className="p-1.5 rounded-lg text-slate-600 hover:text-red-400 hover:bg-red-500/10 transition-colors disabled:opacity-50"
+                        className="p-1.5 rounded-lg text-gray-400 hover:text-red-400 hover:bg-red-500/10 transition-colors disabled:opacity-50"
                       >
                         {ctDeletingId === ct.id ? (
                           <svg className="w-3.5 h-3.5 animate-spin" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
@@ -814,8 +814,8 @@ function InvoicesPageContent() {
             )}
 
             {customerTypes.length > 0 && (
-              <div className="px-5 py-3 border-t border-white/[0.06]">
-                <span className="text-slate-600 text-xs">
+              <div className="px-5 py-3 border-t border-gray-200">
+                <span className="text-gray-400 text-xs">
                   {customerTypes.length} type{customerTypes.length !== 1 ? "s" : ""} ·{" "}
                   {customerTypes.filter((ct) => ct.status).length} active
                 </span>
@@ -831,10 +831,10 @@ function InvoicesPageContent() {
           {/* Add new code form */}
           <form
             onSubmit={(e) => void onCreateServiceCode(e)}
-            className="rounded-2xl border border-white/[0.07] p-5 space-y-4"
+            className="rounded-2xl border border-gray-200 p-5 space-y-4"
             style={{ background: "var(--bg-card)" }}
           >
-            <h2 className="text-sm font-semibold text-white">Add service code</h2>
+            <h2 className="text-sm font-semibold text-gray-900">Add service code</h2>
             <div className="flex gap-3">
               <input
                 className={`${fieldCls()} flex-1`}
@@ -846,7 +846,7 @@ function InvoicesPageContent() {
               <button
                 type="submit"
                 disabled={scCreating || !scNewCode.trim()}
-                className="shimmer-btn px-5 py-2 rounded-xl text-white text-sm font-semibold disabled:opacity-50 shrink-0"
+                className="shimmer-btn px-5 py-2 rounded-xl text-gray-900 text-sm font-semibold disabled:opacity-50 shrink-0"
               >
                 {scCreating ? "Adding…" : "Add"}
               </button>
@@ -854,25 +854,25 @@ function InvoicesPageContent() {
           </form>
 
           {/* List */}
-          <div className="rounded-2xl border border-white/[0.07] overflow-hidden" style={{ background: "var(--bg-card)" }}>
-            <div className="grid grid-cols-[minmax(0,1fr)_6rem_7rem] px-5 py-3 border-b border-white/[0.06]">
-              <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">Code</span>
-              <span className="text-xs font-semibold uppercase tracking-wider text-slate-500 text-center">Status</span>
-              <span className="text-xs font-semibold uppercase tracking-wider text-slate-500 text-center">Actions</span>
+          <div className="rounded-2xl border border-gray-200 overflow-hidden" style={{ background: "var(--bg-card)" }}>
+            <div className="grid grid-cols-[minmax(0,1fr)_6rem_7rem] px-5 py-3 border-b border-gray-200">
+              <span className="text-xs font-semibold uppercase tracking-wider text-gray-400">Code</span>
+              <span className="text-xs font-semibold uppercase tracking-wider text-gray-400 text-center">Status</span>
+              <span className="text-xs font-semibold uppercase tracking-wider text-gray-400 text-center">Actions</span>
             </div>
 
             {scLoading && (
-              <p className="px-5 py-8 text-center text-slate-500 text-sm">Loading…</p>
+              <p className="px-5 py-8 text-center text-gray-400 text-sm">Loading…</p>
             )}
 
             {!scLoading && serviceCodes.length === 0 && (
-              <p className="px-5 py-8 text-center text-slate-500 text-sm">
+              <p className="px-5 py-8 text-center text-gray-400 text-sm">
                 No service codes yet. Add one above.
               </p>
             )}
 
             {!scLoading && serviceCodes.length > 0 && (
-              <ul className="divide-y divide-white/[0.04]">
+              <ul className="divide-y divide-gray-100">
                 {serviceCodes.map((sc) => (
                   <li
                     key={sc.id}
@@ -884,7 +884,7 @@ function InvoicesPageContent() {
                         <form onSubmit={(e) => void onSaveScEdit(e)} className="flex gap-2">
                           <input
                             autoFocus
-                            className="flex-1 rounded-lg bg-[#1a1d2e] border border-white/[0.08] px-2 py-1 text-sm text-white focus:outline-none focus:ring-2 focus:ring-indigo-500/40"
+                            className="flex-1 rounded-lg bg-white border border-gray-200 px-2 py-1 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-indigo-200"
                             value={scEditCode}
                             onChange={(e) => setScEditCode(e.target.value)}
                             maxLength={255}
@@ -892,20 +892,20 @@ function InvoicesPageContent() {
                           <button
                             type="submit"
                             disabled={scEditSaving || !scEditCode.trim()}
-                            className="text-xs text-indigo-400 hover:text-indigo-300 font-semibold disabled:opacity-50"
+                            className="text-xs text-indigo-600 hover:text-indigo-600 font-semibold disabled:opacity-50"
                           >
                             {scEditSaving ? "…" : "Save"}
                           </button>
                           <button
                             type="button"
                             onClick={() => setScEditId(null)}
-                            className="text-xs text-slate-500 hover:text-white"
+                            className="text-xs text-gray-400 hover:text-gray-900"
                           >
                             Cancel
                           </button>
                         </form>
                       ) : (
-                        <span className={`text-sm font-medium font-mono ${sc.status ? "text-white" : "text-slate-500 line-through"}`}>
+                        <span className={`text-sm font-medium font-mono ${sc.status ? "text-gray-900" : "text-gray-400 line-through"}`}>
                           {sc.code}
                         </span>
                       )}
@@ -919,8 +919,8 @@ function InvoicesPageContent() {
                         onClick={() => void onToggleScStatus(sc)}
                         className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-semibold transition-colors ${
                           sc.status
-                            ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 hover:bg-emerald-500/20"
-                            : "bg-slate-700/40 text-slate-500 border border-white/[0.06] hover:bg-slate-700/60"
+                            ? "bg-emerald-500/10 text-emerald-700 border border-emerald-500/20 hover:bg-emerald-500/20"
+                            : "bg-slate-700/40 text-gray-400 border border-gray-200 hover:bg-slate-700/60"
                         }`}
                       >
                         <span className={`w-1.5 h-1.5 rounded-full ${sc.status ? "bg-emerald-400" : "bg-slate-500"}`} />
@@ -935,7 +935,7 @@ function InvoicesPageContent() {
                         title="Edit code"
                         onClick={() => { setScEditId(sc.id); setScEditCode(sc.code); }}
                         disabled={scEditId !== null}
-                        className="p-1.5 rounded-lg text-slate-500 hover:text-indigo-400 hover:bg-indigo-500/10 transition-colors disabled:opacity-30"
+                        className="p-1.5 rounded-lg text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 transition-colors disabled:opacity-30"
                       >
                         <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931z" />
@@ -946,7 +946,7 @@ function InvoicesPageContent() {
                         title="Delete"
                         disabled={scDeletingId === sc.id}
                         onClick={() => void onDeleteServiceCode(sc.id)}
-                        className="p-1.5 rounded-lg text-slate-600 hover:text-red-400 hover:bg-red-500/10 transition-colors disabled:opacity-50"
+                        className="p-1.5 rounded-lg text-gray-400 hover:text-red-400 hover:bg-red-500/10 transition-colors disabled:opacity-50"
                       >
                         {scDeletingId === sc.id ? (
                           <svg className="w-3.5 h-3.5 animate-spin" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
@@ -965,8 +965,8 @@ function InvoicesPageContent() {
             )}
 
             {serviceCodes.length > 0 && (
-              <div className="px-5 py-3 border-t border-white/[0.06]">
-                <span className="text-slate-600 text-xs">
+              <div className="px-5 py-3 border-t border-gray-200">
+                <span className="text-gray-400 text-xs">
                   {serviceCodes.length} code{serviceCodes.length !== 1 ? "s" : ""} ·{" "}
                   {serviceCodes.filter((sc) => sc.status).length} active
                 </span>
@@ -981,7 +981,7 @@ function InvoicesPageContent() {
         <div className="space-y-4">
           {/* Search bar */}
           <div className="relative max-w-sm">
-            <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500 pointer-events-none" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+            <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
               <circle cx="11" cy="11" r="8" /><path strokeLinecap="round" d="M21 21l-4.35-4.35" />
             </svg>
             <input
@@ -989,17 +989,17 @@ function InvoicesPageContent() {
               placeholder="Search by customer, title, or center…"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="w-full pl-9 pr-8 py-2.5 rounded-xl border border-white/[0.09] bg-white/[0.04] text-sm text-white placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-indigo-500/40"
+              className="w-full pl-9 pr-8 py-2.5 rounded-xl border border-gray-200 bg-gray-50 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-200"
             />
             {search && (
-              <button onClick={() => setSearch("")} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-white text-xs">✕</button>
+              <button onClick={() => setSearch("")} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-900 text-xs">✕</button>
             )}
           </div>
 
           {/* Table */}
-          <div className="rounded-2xl border border-white/[0.07] overflow-hidden" style={{ background: "var(--bg-card)" }}>
+          <div className="rounded-2xl border border-gray-200 overflow-hidden" style={{ background: "var(--bg-card)" }}>
             {/* Header */}
-            <div className={`grid ${COLS} px-5 py-3 border-b border-white/[0.06] max-md:hidden`}>
+            <div className={`grid ${COLS} px-5 py-3 border-b border-gray-200 max-md:hidden`}>
               {([
                 { label: "#", key: "id" as SortKey, align: "text-right" },
                 { label: "Customer", key: "customer" as SortKey },
@@ -1013,7 +1013,7 @@ function InvoicesPageContent() {
                   type="button"
                   disabled={!h.key}
                   onClick={() => h.key && toggleSort(h.key)}
-                  className={`flex items-center text-xs font-semibold uppercase tracking-wider text-slate-500 hover:text-slate-300 transition-colors disabled:cursor-default disabled:hover:text-slate-500 ${h.align ?? ""}`}
+                  className={`flex items-center text-xs font-semibold uppercase tracking-wider text-gray-400 hover:text-gray-600 transition-colors disabled:cursor-default disabled:hover:text-gray-400 ${h.align ?? ""}`}
                 >
                   {h.label}
                   {h.key && <SortIcon active={sortKey === h.key} dir={sortDir} />}
@@ -1023,35 +1023,35 @@ function InvoicesPageContent() {
 
             {/* Rows */}
             {filteredInvoices.length === 0 ? (
-              <p className="px-5 py-10 text-center text-slate-500 text-sm">
+              <p className="px-5 py-10 text-center text-gray-400 text-sm">
                 {search ? `No groupings match "${search}"` : "No invoice groupings yet. Create one in the New Grouping tab."}
               </p>
             ) : (
-              <ul className="divide-y divide-white/[0.04]">
+              <ul className="divide-y divide-gray-100">
                 {filteredInvoices.map((inv) => (
-                  <li key={inv.id} className={`grid max-md:grid-cols-1 ${COLS} items-center px-5 py-3.5 hover:bg-white/[0.03] transition-colors`}>
+                  <li key={inv.id} className={`grid max-md:grid-cols-1 ${COLS} items-center px-5 py-3.5 hover:bg-gray-50 transition-colors`}>
                     {/* ID */}
-                    <span className="text-slate-600 text-xs font-mono text-right pr-4">#{inv.id}</span>
+                    <span className="text-gray-400 text-xs font-mono text-right pr-4">#{inv.id}</span>
 
                     {/* Customer */}
                     <div className="flex items-center gap-2.5 min-w-0 pr-4">
-                      <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-indigo-500/20 to-violet-600/20 border border-indigo-500/20 flex items-center justify-center text-indigo-400 text-xs font-bold shrink-0">
+                      <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-indigo-500/20 to-violet-600/20 border border-indigo-200 flex items-center justify-center text-indigo-600 text-xs font-bold shrink-0">
                         {companyLabel(inv.company_id)[0]?.toUpperCase() ?? "?"}
                       </div>
-                      <span className="text-white text-sm font-medium truncate">{companyLabel(inv.company_id)}</span>
+                      <span className="text-gray-900 text-sm font-medium truncate">{companyLabel(inv.company_id)}</span>
                     </div>
 
                     {/* Title */}
-                    <span className="text-slate-400 text-sm truncate pr-4">{inv.title ?? <span className="text-slate-700 italic">—</span>}</span>
+                    <span className="text-gray-500 text-sm truncate pr-4">{inv.title ?? <span className="text-gray-300 italic">—</span>}</span>
 
                     {/* Centers */}
-                    <span className="text-slate-400 text-xs truncate pr-4" title={formatCenters(inv)}>
-                      {formatCenters(inv) || <span className="text-slate-700">—</span>}
+                    <span className="text-gray-500 text-xs truncate pr-4" title={formatCenters(inv)}>
+                      {formatCenters(inv) || <span className="text-gray-300">—</span>}
                     </span>
 
                     {/* Count badge */}
                     <div className="flex justify-center">
-                      <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 text-xs font-semibold">
+                      <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-indigo-50 border border-indigo-200 text-indigo-600 text-xs font-semibold">
                         {inv.center_ids.length}
                       </span>
                     </div>
@@ -1063,7 +1063,7 @@ function InvoicesPageContent() {
                         type="button"
                         title="Edit grouping"
                         onClick={() => setEditInvoice(inv)}
-                        className="p-1.5 rounded-lg text-slate-500 hover:text-indigo-400 hover:bg-indigo-500/10 transition-colors"
+                        className="p-1.5 rounded-lg text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 transition-colors"
                       >
                         <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931z" />
@@ -1075,7 +1075,7 @@ function InvoicesPageContent() {
                         title="Remove grouping"
                         disabled={deletingId === inv.id}
                         onClick={() => void onDeleteGrouping(inv.id)}
-                        className="p-1.5 rounded-lg text-slate-600 hover:text-red-400 hover:bg-red-500/10 transition-colors disabled:opacity-50"
+                        className="p-1.5 rounded-lg text-gray-400 hover:text-red-400 hover:bg-red-500/10 transition-colors disabled:opacity-50"
                       >
                         {deletingId === inv.id ? (
                           <svg className="w-3.5 h-3.5 animate-spin" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
@@ -1095,8 +1095,8 @@ function InvoicesPageContent() {
 
             {/* Footer */}
             {invoices.length > 0 && (
-              <div className="px-5 py-3 border-t border-white/[0.06]">
-                <span className="text-slate-600 text-xs">
+              <div className="px-5 py-3 border-t border-gray-200">
+                <span className="text-gray-400 text-xs">
                   {filteredInvoices.length} grouping{filteredInvoices.length !== 1 ? "s" : ""}
                   {search ? ` matching "${search}"` : ` · ${invoices.length} total`}
                 </span>
@@ -1111,7 +1111,7 @@ function InvoicesPageContent() {
 
 export default function InvoicesPage() {
   return (
-    <Suspense fallback={<div className="max-w-5xl mx-auto py-16 text-center text-slate-500 text-sm animate-fadeInUp">Loading…</div>}>
+    <Suspense fallback={<div className="max-w-5xl mx-auto py-16 text-center text-gray-400 text-sm animate-fadeInUp">Loading…</div>}>
       <InvoicesPageContent />
     </Suspense>
   );

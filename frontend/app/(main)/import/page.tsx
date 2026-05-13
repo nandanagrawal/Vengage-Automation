@@ -23,26 +23,26 @@ import { addJob, updateJob } from "@/lib/jobQueue";
 
 function StatusBadge({ status }: { status: string }) {
   const map: Record<string, string> = {
-    completed: "text-emerald-400 bg-emerald-500/10 border-emerald-500/20",
-    completed_with_errors: "text-amber-400 bg-amber-500/10 border-amber-500/20",
-    failed: "text-rose-400 bg-rose-500/10 border-rose-500/20",
-    processing: "text-indigo-400 bg-indigo-500/10 border-indigo-500/20",
+    completed: "text-emerald-700 bg-emerald-50 border-emerald-200",
+    completed_with_errors: "text-amber-700 bg-amber-50 border-amber-200",
+    failed: "text-red-600 bg-red-50 border-red-200",
+    processing: "text-indigo-600 bg-indigo-50 border-indigo-200",
   };
   const label: Record<string, string> = {
     completed: "Completed", completed_with_errors: "Partial",
     failed: "Failed", processing: "Processing",
   };
   return (
-    <span className={`inline-flex items-center px-2 py-0.5 rounded-md border text-[11px] font-semibold uppercase tracking-wide ${map[status] ?? "text-slate-400 bg-white/[0.05] border-white/10"}`}>
+    <span className={`inline-flex items-center px-2 py-0.5 rounded-md border text-[11px] font-semibold uppercase tracking-wide ${map[status] ?? "text-gray-500 bg-gray-50 border-white/10"}`}>
       {label[status] ?? status}
     </span>
   );
 }
 
 function SendStatusDot({ status }: { status: string }) {
-  if (status === "sent") return <span className="inline-flex items-center gap-1 text-emerald-400 text-xs"><span className="w-1.5 h-1.5 rounded-full bg-emerald-400 inline-block" />Sent</span>;
-  if (status === "failed") return <span className="inline-flex items-center gap-1 text-rose-400 text-xs"><span className="w-1.5 h-1.5 rounded-full bg-rose-400 inline-block" />Failed</span>;
-  return <span className="inline-flex items-center gap-1 text-indigo-400 text-xs"><span className="w-1.5 h-1.5 rounded-full bg-indigo-400 inline-block" />Created</span>;
+  if (status === "sent") return <span className="inline-flex items-center gap-1 text-emerald-700 text-xs"><span className="w-1.5 h-1.5 rounded-full bg-emerald-400 inline-block" />Sent</span>;
+  if (status === "failed") return <span className="inline-flex items-center gap-1 text-red-600 text-xs"><span className="w-1.5 h-1.5 rounded-full bg-rose-400 inline-block" />Failed</span>;
+  return <span className="inline-flex items-center gap-1 text-indigo-600 text-xs"><span className="w-1.5 h-1.5 rounded-full bg-indigo-400 inline-block" />Created</span>;
 }
 
 function fmtDate(iso: string) {
@@ -60,11 +60,11 @@ function StepBar({ active }: { active: 0 | 1 | 2 | 3 }) {
     <div className="flex items-center gap-0 mb-8">
       {STEPS.map((label, i) => (
         <div key={label} className="flex items-center">
-          <div className={`flex items-center justify-center w-7 h-7 rounded-full border text-xs font-bold transition-colors ${i < active ? "bg-indigo-600 border-indigo-600 text-white" : i === active ? "bg-indigo-600/20 border-indigo-500 text-indigo-300" : "bg-white/[0.03] border-white/[0.1] text-slate-600"}`}>
+          <div className={`flex items-center justify-center w-7 h-7 rounded-full border text-xs font-bold transition-colors ${i < active ? "bg-indigo-600 border-indigo-600 text-gray-900" : i === active ? "bg-indigo-100 border-indigo-500 text-indigo-600" : "bg-gray-50 border-gray-200 text-gray-400"}`}>
             {i < active ? "✓" : i + 1}
           </div>
-          <span className={`ml-1.5 text-xs font-medium ${i === active ? "text-white" : "text-slate-500"}`}>{label}</span>
-          {i < STEPS.length - 1 && <div className={`mx-3 h-px w-8 ${i < active ? "bg-indigo-600" : "bg-white/[0.08]"}`} />}
+          <span className={`ml-1.5 text-xs font-medium ${i === active ? "text-gray-900" : "text-gray-400"}`}>{label}</span>
+          {i < STEPS.length - 1 && <div className={`mx-3 h-px w-8 ${i < active ? "bg-indigo-600" : "bg-gray-100"}`} />}
         </div>
       ))}
     </div>
@@ -98,35 +98,35 @@ function UploadStage({ onValidated }: { onValidated: (v: ValidationResponse, fil
   };
 
   return (
-    <form onSubmit={(e) => void onSubmit(e)} className="rounded-2xl border border-white/[0.07] p-6 space-y-5" style={{ background: "var(--bg-card)" }}>
+    <form onSubmit={(e) => void onSubmit(e)} className="rounded-2xl border border-gray-200 p-6 space-y-5" style={{ background: "var(--bg-card)" }}>
       <div>
-        <h2 className="text-sm font-semibold text-white">Upload spreadsheet</h2>
-        <p className="text-[11px] text-slate-500 mt-1">Upload a .csv, .xlsx, or .xls file. We&apos;ll validate it before generating any invoices.</p>
+        <h2 className="text-sm font-semibold text-gray-900">Upload spreadsheet</h2>
+        <p className="text-[11px] text-gray-400 mt-1">Upload a .csv, .xlsx, or .xls file. We&apos;ll validate it before generating any invoices.</p>
       </div>
       <div
         onClick={() => inputRef.current?.click()}
         onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
         onDragLeave={() => setDragging(false)}
         onDrop={onDrop}
-        className={`cursor-pointer rounded-xl border-2 border-dashed px-6 py-10 text-center transition-colors ${dragging ? "border-indigo-400 bg-indigo-500/10" : file ? "border-emerald-500/50 bg-emerald-500/5" : "border-white/[0.1] hover:border-white/[0.2] bg-white/[0.02]"}`}
+        className={`cursor-pointer rounded-xl border-2 border-dashed px-6 py-10 text-center transition-colors ${dragging ? "border-indigo-400 bg-indigo-50" : file ? "border-emerald-500/50 bg-emerald-50" : "border-gray-200 hover:border-indigo-300 bg-gray-50"}`}
       >
         <input ref={inputRef} type="file" accept=".csv,.xlsx,.xls" className="hidden" onChange={(e) => handleFile(e.target.files?.[0] ?? null)} />
         {file ? (
           <div className="flex flex-col items-center gap-2">
-            <svg className="w-8 h-8 text-emerald-400" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-            <p className="text-sm text-emerald-400 font-medium">{file.name}</p>
-            <p className="text-xs text-slate-500">{(file.size / 1024).toFixed(1)} KB · click to change</p>
+            <svg className="w-8 h-8 text-emerald-700" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+            <p className="text-sm text-emerald-700 font-medium">{file.name}</p>
+            <p className="text-xs text-gray-400">{(file.size / 1024).toFixed(1)} KB · click to change</p>
           </div>
         ) : (
           <div className="flex flex-col items-center gap-2">
-            <svg className="w-8 h-8 text-slate-600" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5" /></svg>
-            <p className="text-sm text-slate-400">Drag & drop or <span className="text-indigo-400 underline underline-offset-2">browse</span></p>
-            <p className="text-xs text-slate-600">.csv, .xlsx, .xls — max 10 MB</p>
+            <svg className="w-8 h-8 text-gray-400" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5" /></svg>
+            <p className="text-sm text-gray-500">Drag & drop or <span className="text-indigo-600 underline underline-offset-2">browse</span></p>
+            <p className="text-xs text-gray-400">.csv, .xlsx, .xls — max 10 MB</p>
           </div>
         )}
       </div>
-      {error && <p className="text-rose-400 text-sm rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-2.5">{error}</p>}
-      <button type="submit" disabled={!file || loading} className="shimmer-btn px-5 py-2.5 rounded-xl text-white text-sm font-semibold disabled:opacity-50 flex items-center gap-2">
+      {error && <p className="text-red-600 text-sm rounded-lg border border-rose-500/30 bg-red-50 px-4 py-2.5">{error}</p>}
+      <button type="submit" disabled={!file || loading} className="shimmer-btn px-5 py-2.5 rounded-xl text-gray-900 text-sm font-semibold disabled:opacity-50 flex items-center gap-2">
         {loading && <svg className="w-4 h-4 animate-spin" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9" /></svg>}
         {loading ? "Validating…" : "Validate file"}
       </button>
@@ -180,27 +180,27 @@ function ErrorsStage({
     <div className="space-y-5">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-sm font-semibold text-white">Fix validation errors</h2>
-          <p className="text-[11px] text-slate-500 mt-0.5">{errorCount} row{errorCount !== 1 ? "s" : ""} with errors — edit cells and re-validate.</p>
+          <h2 className="text-sm font-semibold text-gray-900">Fix validation errors</h2>
+          <p className="text-[11px] text-gray-400 mt-0.5">{errorCount} row{errorCount !== 1 ? "s" : ""} with errors — edit cells and re-validate.</p>
         </div>
         <div className="flex gap-2">
-          <button type="button" onClick={onBack} className="px-4 py-2 rounded-xl text-slate-400 hover:text-white text-sm border border-white/[0.07] transition-colors">Back</button>
-          <button type="button" onClick={() => void onRevalidate()} disabled={loading} className="shimmer-btn px-4 py-2 rounded-xl text-white text-sm font-semibold disabled:opacity-50 flex items-center gap-2">
+          <button type="button" onClick={onBack} className="px-4 py-2 rounded-xl text-gray-500 hover:text-gray-900 text-sm border border-gray-200 transition-colors">Back</button>
+          <button type="button" onClick={() => void onRevalidate()} disabled={loading} className="shimmer-btn px-4 py-2 rounded-xl text-gray-900 text-sm font-semibold disabled:opacity-50 flex items-center gap-2">
             {loading && <svg className="w-4 h-4 animate-spin" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9" /></svg>}
             {loading ? "Re-validating…" : "Re-validate"}
           </button>
         </div>
       </div>
 
-      {error && <p className="text-rose-400 text-sm rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-2.5">{error}</p>}
+      {error && <p className="text-red-600 text-sm rounded-lg border border-rose-500/30 bg-red-50 px-4 py-2.5">{error}</p>}
 
       {/* Customer-level errors */}
       {validation.customer_errors.length > 0 && (
-        <div className="rounded-xl border border-rose-500/20 bg-rose-500/5 p-4 space-y-2">
-          <p className="text-xs font-semibold text-rose-400 uppercase tracking-wide">Customer configuration issues</p>
+        <div className="rounded-xl border border-red-200 bg-rose-500/5 p-4 space-y-2">
+          <p className="text-xs font-semibold text-red-600 uppercase tracking-wide">Customer configuration issues</p>
           {validation.customer_errors.map((ce, i) => (
             <div key={i}>
-              <p className="text-xs text-white font-medium">{ce.customer_display_name}</p>
+              <p className="text-xs text-gray-900 font-medium">{ce.customer_display_name}</p>
               {ce.errors.map((e, j) => <p key={j} className="text-xs text-rose-300 ml-2">· {e}</p>)}
             </div>
           ))}
@@ -208,11 +208,11 @@ function ErrorsStage({
       )}
 
       {/* Editable table */}
-      <div className="rounded-xl border border-white/[0.07] overflow-auto">
+      <div className="rounded-xl border border-gray-200 overflow-auto">
         <table className="w-full text-xs min-w-max">
           <thead>
-            <tr className="border-b border-white/[0.07] text-[10px] font-semibold uppercase tracking-wide text-slate-500">
-              <th className="px-3 py-2.5 text-left sticky left-0 bg-[var(--bg-card)] z-10">#</th>
+            <tr className="border-b border-gray-200 text-[10px] font-semibold uppercase tracking-wide text-gray-400">
+              <th className="px-3 py-2.5 text-left sticky left-0 bg-white z-10">#</th>
               <th className="px-3 py-2.5 text-left min-w-[140px]">Center ID</th>
               <th className="px-3 py-2.5 text-left min-w-[140px]">Center Name</th>
               <th className="px-3 py-2.5 text-left min-w-[120px]">Prefix</th>
@@ -221,34 +221,34 @@ function ErrorsStage({
               <th className="px-3 py-2.5 text-left">Errors</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-white/[0.04]">
+          <tbody className="divide-y divide-gray-100">
             {rows.map((row, i) => {
               const hasErr = row.errors.length > 0;
               return (
                 <tr key={i} className={hasErr ? "bg-rose-500/5" : ""}>
-                  <td className="px-3 py-1.5 text-slate-600 sticky left-0 bg-inherit">{row.row_index + 1}</td>
+                  <td className="px-3 py-1.5 text-gray-400 sticky left-0 bg-inherit">{row.row_index + 1}</td>
                   <td className="px-2 py-1">
                     <input value={row.center_id} onChange={e => updateCell(i, "center_id", e.target.value)}
-                      className={`w-full bg-transparent border rounded px-2 py-1 text-white outline-none focus:border-indigo-500 transition-colors ${hasErr ? "border-rose-500/50" : "border-white/[0.1]"}`} />
+                      className={`w-full bg-transparent border rounded px-2 py-1 text-gray-900 outline-none focus:border-indigo-500 transition-colors ${hasErr ? "border-rose-500/50" : "border-gray-200"}`} />
                   </td>
                   <td className="px-2 py-1">
                     <input value={row.center_name} onChange={e => updateCell(i, "center_name", e.target.value)}
-                      className="w-full bg-transparent border border-white/[0.1] rounded px-2 py-1 text-white outline-none focus:border-indigo-500 transition-colors" />
+                      className="w-full bg-transparent border border-gray-200 rounded px-2 py-1 text-gray-900 outline-none focus:border-indigo-500 transition-colors" />
                   </td>
                   <td className="px-2 py-1">
                     <input value={row.center_prefix} onChange={e => updateCell(i, "center_prefix", e.target.value)}
-                      className="w-full bg-transparent border border-white/[0.1] rounded px-2 py-1 text-white outline-none focus:border-indigo-500 transition-colors" />
+                      className="w-full bg-transparent border border-gray-200 rounded px-2 py-1 text-gray-900 outline-none focus:border-indigo-500 transition-colors" />
                   </td>
                   {cols.map(c => (
                     <td key={c} className="px-2 py-1">
                       <input type="number" value={row.metrics[c] ?? 0} onChange={e => updateMetric(i, c, e.target.value)}
-                        className="w-full bg-transparent border border-white/[0.1] rounded px-2 py-1 text-right text-slate-300 outline-none focus:border-indigo-500 transition-colors" />
+                        className="w-full bg-transparent border border-gray-200 rounded px-2 py-1 text-right text-gray-600 outline-none focus:border-indigo-500 transition-colors" />
                     </td>
                   ))}
-                  <td className="px-3 py-1.5 text-slate-400">{row.customer_display_name ?? <span className="text-slate-600">—</span>}</td>
+                  <td className="px-3 py-1.5 text-gray-500">{row.customer_display_name ?? <span className="text-gray-400">—</span>}</td>
                   <td className="px-3 py-1.5">
                     {row.errors.length > 0
-                      ? <span className="text-rose-400">{row.errors.join("; ")}</span>
+                      ? <span className="text-red-600">{row.errors.join("; ")}</span>
                       : <span className="text-emerald-500">✓</span>}
                   </td>
                 </tr>
@@ -310,13 +310,13 @@ function PreviewStage({
     <div className="space-y-5">
       {/* Confirmation modal */}
       {showConfirm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm">
-          <div className="w-full max-w-sm rounded-2xl border border-white/[0.1] p-6 space-y-4 shadow-2xl" style={{ background: "var(--bg-deep)" }}>
-            <h3 className="text-base font-bold text-white">Confirm changes</h3>
-            <p className="text-sm text-slate-400">You&apos;ve edited values in the preview. These changes will be used when generating invoices. Are you sure?</p>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm">
+          <div className="w-full max-w-sm rounded-2xl border border-gray-200 p-6 space-y-4 shadow-2xl" style={{ background: "var(--surface-2)" }}>
+            <h3 className="text-base font-bold text-gray-900">Confirm changes</h3>
+            <p className="text-sm text-gray-500">You&apos;ve edited values in the preview. These changes will be used when generating invoices. Are you sure?</p>
             <div className="flex gap-3 justify-end">
-              <button type="button" onClick={() => setShowConfirm(false)} className="px-4 py-2 rounded-xl text-slate-400 hover:text-white border border-white/[0.07] text-sm transition-colors">Cancel</button>
-              <button type="button" onClick={confirmSubmit} className="shimmer-btn px-4 py-2 rounded-xl text-white text-sm font-semibold">Confirm & submit</button>
+              <button type="button" onClick={() => setShowConfirm(false)} className="px-4 py-2 rounded-xl text-gray-500 hover:text-gray-900 border border-gray-200 text-sm transition-colors">Cancel</button>
+              <button type="button" onClick={confirmSubmit} className="shimmer-btn px-4 py-2 rounded-xl text-gray-900 text-sm font-semibold">Confirm & submit</button>
             </div>
           </div>
         </div>
@@ -324,12 +324,12 @@ function PreviewStage({
 
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-sm font-semibold text-white">Preview</h2>
-          <p className="text-[11px] text-slate-500 mt-0.5">{preview.customers.length} customer{preview.customers.length !== 1 ? "s" : ""} · review and submit.</p>
+          <h2 className="text-sm font-semibold text-gray-900">Preview</h2>
+          <p className="text-[11px] text-gray-400 mt-0.5">{preview.customers.length} customer{preview.customers.length !== 1 ? "s" : ""} · review and submit.</p>
         </div>
         <div className="flex gap-2">
-          <button type="button" onClick={onBack} className="px-4 py-2 rounded-xl text-slate-400 hover:text-white text-sm border border-white/[0.07] transition-colors">Back</button>
-          <button type="button" onClick={handleSubmitClick} className="shimmer-btn px-5 py-2.5 rounded-xl text-white text-sm font-semibold">
+          <button type="button" onClick={onBack} className="px-4 py-2 rounded-xl text-gray-500 hover:text-gray-900 text-sm border border-gray-200 transition-colors">Back</button>
+          <button type="button" onClick={handleSubmitClick} className="shimmer-btn px-5 py-2.5 rounded-xl text-gray-900 text-sm font-semibold">
             {isDirty ? "Submit with changes" : "Submit invoices"}
           </button>
         </div>
@@ -338,7 +338,7 @@ function PreviewStage({
       {preview.warnings.length > 0 && (
         <ul className="space-y-1">
           {preview.warnings.map((w, i) => (
-            <li key={i} className="text-xs text-amber-400/90 rounded-lg bg-amber-500/5 border border-amber-500/20 px-3 py-2">{w}</li>
+            <li key={i} className="text-xs text-amber-700/90 rounded-lg bg-amber-500/5 border border-amber-200 px-3 py-2">{w}</li>
           ))}
         </ul>
       )}
@@ -346,17 +346,17 @@ function PreviewStage({
       {/* Per-customer sections */}
       <div className="space-y-4">
         {preview.customers.map((cust) => (
-          <div key={cust.customer_id} className="rounded-2xl border border-white/[0.07] overflow-hidden" style={{ background: "var(--bg-card)" }}>
+          <div key={cust.customer_id} className="rounded-2xl border border-gray-200 overflow-hidden" style={{ background: "var(--bg-card)" }}>
             {/* Customer header */}
-            <div className="flex items-center justify-between px-5 py-3 border-b border-white/[0.06]">
+            <div className="flex items-center justify-between px-5 py-3 border-b border-gray-200">
               <div className="flex items-center gap-3">
                 <div>
-                  <span className="text-sm font-semibold text-white">{cust.display_name}</span>
+                  <span className="text-sm font-semibold text-gray-900">{cust.display_name}</span>
                   <div className="flex items-center gap-2 mt-0.5">
-                    {!cust.has_qbo_id && <span className="text-[10px] text-rose-400 bg-rose-500/10 border border-rose-500/20 px-1.5 py-0.5 rounded">No QBO ID</span>}
+                    {!cust.has_qbo_id && <span className="text-[10px] text-red-600 bg-red-50 border border-red-200 px-1.5 py-0.5 rounded">No QBO ID</span>}
                     {cust.primary_email
-                      ? <span className="text-[10px] text-slate-500">{cust.primary_email}</span>
-                      : <span className="text-[10px] text-amber-400 bg-amber-500/10 border border-amber-500/20 px-1.5 py-0.5 rounded">No email</span>}
+                      ? <span className="text-[10px] text-gray-400">{cust.primary_email}</span>
+                      : <span className="text-[10px] text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded">No email</span>}
                   </div>
                 </div>
               </div>
@@ -364,36 +364,36 @@ function PreviewStage({
 
             {/* Groups */}
             {cust.groups.map((grp, gi) => (
-              <div key={gi} className={gi < cust.groups.length - 1 ? "border-b border-white/[0.05]" : ""}>
-                <div className="px-5 py-2 bg-white/[0.02]">
-                  <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Group: </span>
-                  <span className="text-[11px] text-slate-400">{grp.group_label}</span>
+              <div key={gi} className={gi < cust.groups.length - 1 ? "border-b border-gray-100" : ""}>
+                <div className="px-5 py-2 bg-gray-50">
+                  <span className="text-[10px] font-semibold uppercase tracking-wide text-gray-400">Group: </span>
+                  <span className="text-[11px] text-gray-500">{grp.group_label}</span>
                 </div>
                 <div className="overflow-auto">
                   <table className="w-full text-xs min-w-max">
                     <thead>
-                      <tr className="text-[10px] font-semibold uppercase tracking-wide text-slate-500 border-b border-white/[0.05]">
+                      <tr className="text-[10px] font-semibold uppercase tracking-wide text-gray-400 border-b border-gray-100">
                         <th className="px-4 py-2 text-left">Center ID</th>
                         <th className="px-4 py-2 text-left">Prefix</th>
                         {cols.map(c => <th key={c} className="px-3 py-2 text-right min-w-[90px]">{c}</th>)}
                       </tr>
                     </thead>
-                    <tbody className="divide-y divide-white/[0.03]">
+                    <tbody className="divide-y divide-gray-100">
                       {grp.centers.map((ctr) => {
                         const row = rowByCenterId[ctr.center_id.toLowerCase()];
                         return (
                           <tr key={ctr.center_id}>
-                            <td className="px-4 py-1.5 text-slate-300 font-mono text-[11px]">{ctr.center_id}</td>
+                            <td className="px-4 py-1.5 text-gray-600 font-mono text-[11px]">{ctr.center_id}</td>
                             <td className="px-3 py-1">
                               <input value={row?.center_prefix ?? ctr.center_prefix}
                                 onChange={e => updatePrefix(ctr.center_id.toLowerCase(), e.target.value)}
-                                className="w-24 bg-transparent border border-white/[0.1] rounded px-2 py-0.5 text-slate-300 outline-none focus:border-indigo-500 transition-colors text-[11px]" />
+                                className="w-24 bg-transparent border border-gray-200 rounded px-2 py-0.5 text-gray-600 outline-none focus:border-indigo-500 transition-colors text-[11px]" />
                             </td>
                             {cols.map(c => (
                               <td key={c} className="px-2 py-1">
                                 <input type="number" value={row?.metrics[c] ?? ctr.metrics[c] ?? 0}
                                   onChange={e => updateMetric(ctr.center_id.toLowerCase(), c, e.target.value)}
-                                  className="w-full bg-transparent border border-white/[0.1] rounded px-2 py-0.5 text-right text-slate-300 outline-none focus:border-indigo-500 transition-colors text-[11px]" />
+                                  className="w-full bg-transparent border border-gray-200 rounded px-2 py-0.5 text-right text-gray-600 outline-none focus:border-indigo-500 transition-colors text-[11px]" />
                               </td>
                             ))}
                           </tr>
@@ -415,37 +415,37 @@ function PreviewStage({
 
 function ResultStage({ result, onReset }: { result: InvoiceUploadResult; onReset: () => void }) {
   return (
-    <div className="rounded-2xl border border-white/[0.07] p-6 space-y-5" style={{ background: "var(--bg-card)" }}>
+    <div className="rounded-2xl border border-gray-200 p-6 space-y-5" style={{ background: "var(--bg-card)" }}>
       <div className="flex items-center justify-between">
-        <h3 className="text-sm font-semibold text-white">Result</h3>
+        <h3 className="text-sm font-semibold text-gray-900">Result</h3>
         <StatusBadge status={result.status} />
       </div>
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
         {[
-          { label: "Centers matched", value: result.centers_matched, color: "text-emerald-400" },
-          { label: "Centers skipped", value: result.centers_skipped, color: result.centers_skipped > 0 ? "text-amber-400" : undefined },
-          { label: "Invoices created", value: result.invoices_created, color: result.invoices_created > 0 ? "text-emerald-400" : undefined },
-          { label: "Invoices failed", value: result.invoices_failed, color: result.invoices_failed > 0 ? "text-rose-400" : undefined },
+          { label: "Centers matched", value: result.centers_matched, color: "text-emerald-700" },
+          { label: "Centers skipped", value: result.centers_skipped, color: result.centers_skipped > 0 ? "text-amber-700" : undefined },
+          { label: "Invoices created", value: result.invoices_created, color: result.invoices_created > 0 ? "text-emerald-700" : undefined },
+          { label: "Invoices failed", value: result.invoices_failed, color: result.invoices_failed > 0 ? "text-red-600" : undefined },
         ].map(({ label, value, color }) => (
-          <div key={label} className="rounded-xl bg-white/[0.03] border border-white/[0.06] px-4 py-3">
-            <p className="text-[11px] text-slate-500 uppercase tracking-wide">{label}</p>
-            <p className={`text-2xl font-bold mt-0.5 ${color ?? "text-white"}`}>{value}</p>
+          <div key={label} className="rounded-xl bg-gray-50 border border-gray-200 px-4 py-3">
+            <p className="text-[11px] text-gray-400 uppercase tracking-wide">{label}</p>
+            <p className={`text-2xl font-bold mt-0.5 ${color ?? "text-gray-900"}`}>{value}</p>
           </div>
         ))}
       </div>
       {result.invoice_details.length > 0 && (
         <div>
-          <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">Invoices created</h4>
-          <div className="rounded-xl border border-white/[0.07] overflow-hidden">
-            <div className="grid grid-cols-[5rem_minmax(0,2fr)_minmax(0,2fr)_8rem_5rem] px-4 py-2.5 border-b border-white/[0.06] text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+          <h4 className="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-2">Invoices created</h4>
+          <div className="rounded-xl border border-gray-200 overflow-hidden">
+            <div className="grid grid-cols-[5rem_minmax(0,2fr)_minmax(0,2fr)_8rem_5rem] px-4 py-2.5 border-b border-gray-200 text-[10px] font-semibold uppercase tracking-wide text-gray-400">
               <span>Inv #</span><span>Customer</span><span>Group</span><span className="text-right">Delivery Date</span><span className="text-center">Status</span>
             </div>
             {result.invoice_details.map((d, i) => (
-              <div key={i} className="grid grid-cols-[5rem_minmax(0,2fr)_minmax(0,2fr)_8rem_5rem] px-4 py-2.5 border-b border-white/[0.04] last:border-0 items-center">
-                <span className="text-slate-400 text-xs font-mono truncate">{d.invoice_number ?? "—"}</span>
-                <span className="text-white text-sm truncate pr-2">{d.customer}</span>
-                <span className="text-slate-400 text-xs truncate pr-2">{d.group}</span>
-                <span className="text-slate-300 text-xs text-right">{d.sent_at ? new Date(d.sent_at).toLocaleDateString("en-AU", { day: "2-digit", month: "short", year: "numeric" }) : "—"}</span>
+              <div key={i} className="grid grid-cols-[5rem_minmax(0,2fr)_minmax(0,2fr)_8rem_5rem] px-4 py-2.5 border-b border-gray-100 last:border-0 items-center">
+                <span className="text-gray-500 text-xs font-mono truncate">{d.invoice_number ?? "—"}</span>
+                <span className="text-gray-900 text-sm truncate pr-2">{d.customer}</span>
+                <span className="text-gray-500 text-xs truncate pr-2">{d.group}</span>
+                <span className="text-gray-600 text-xs text-right">{d.sent_at ? new Date(d.sent_at).toLocaleDateString("en-AU", { day: "2-digit", month: "short", year: "numeric" }) : "—"}</span>
                 <div className="flex justify-center"><SendStatusDot status={d.send_status} /></div>
               </div>
             ))}
@@ -454,15 +454,15 @@ function ResultStage({ result, onReset }: { result: InvoiceUploadResult; onReset
       )}
       {result.errors.length > 0 && (
         <div>
-          <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">Warnings / skipped ({result.errors.length})</h4>
+          <h4 className="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-2">Warnings / skipped ({result.errors.length})</h4>
           <ul className="space-y-1.5">
             {result.errors.map((e, i) => (
-              <li key={i} className="text-xs text-amber-400/90 rounded-lg bg-amber-500/5 border border-amber-500/20 px-3 py-2">{e}</li>
+              <li key={i} className="text-xs text-amber-700/90 rounded-lg bg-amber-500/5 border border-amber-200 px-3 py-2">{e}</li>
             ))}
           </ul>
         </div>
       )}
-      <button type="button" onClick={onReset} className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors underline underline-offset-2">
+      <button type="button" onClick={onReset} className="text-xs text-indigo-600 hover:text-indigo-600 transition-colors underline underline-offset-2">
         Upload another file
       </button>
     </div>
@@ -482,35 +482,35 @@ function HistoryDetailModal({ uploadId, onClose }: { uploadId: number; onClose: 
   }, [uploadId]);
 
   return (
-    <div className="fixed inset-x-0 top-16 z-30 flex items-start justify-center p-4 bg-black/70 backdrop-blur-sm overflow-hidden" style={{ height: "calc(100vh - 4rem)" }}>
-      <div className="w-full max-w-4xl max-h-full rounded-2xl border border-white/[0.1] shadow-2xl flex flex-col overflow-hidden" style={{ background: "var(--bg-deep)" }}>
-        <div className="flex items-center justify-between px-6 py-4 border-b border-white/[0.08] shrink-0">
+    <div className="fixed inset-x-0 top-16 z-30 flex items-start justify-center p-4 bg-black/30 backdrop-blur-sm overflow-hidden" style={{ height: "calc(100vh - 4rem)" }}>
+      <div className="w-full max-w-4xl max-h-full rounded-2xl border border-gray-200 shadow-2xl flex flex-col overflow-hidden" style={{ background: "var(--surface-2)" }}>
+        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 shrink-0">
           <div className="min-w-0">
-            <h2 className="text-base font-bold text-white truncate">{data?.file_name ?? "Upload detail"}</h2>
-            {data && <p className="text-xs text-slate-500 mt-0.5">{fmtDate(data.created_at)}{data.uploaded_by && <> · {data.uploaded_by}</>} · <StatusBadge status={data.status} /></p>}
+            <h2 className="text-base font-bold text-gray-900 truncate">{data?.file_name ?? "Upload detail"}</h2>
+            {data && <p className="text-xs text-gray-400 mt-0.5">{fmtDate(data.created_at)}{data.uploaded_by && <> · {data.uploaded_by}</>} · <StatusBadge status={data.status} /></p>}
           </div>
-          <button type="button" onClick={onClose} className="ml-4 shrink-0 text-slate-400 hover:text-white transition-colors">
+          <button type="button" onClick={onClose} className="ml-4 shrink-0 text-gray-500 hover:text-gray-900 transition-colors">
             <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
           </button>
         </div>
         <div className="overflow-y-auto flex-1 p-6 space-y-4">
-          {loading && <p className="text-slate-500 text-sm text-center py-8">Loading…</p>}
-          {error && <p className="text-rose-400 text-sm">{error}</p>}
+          {loading && <p className="text-gray-400 text-sm text-center py-8">Loading…</p>}
+          {error && <p className="text-red-600 text-sm">{error}</p>}
           {data && (
             <>
               {/* Stats */}
               <div className="grid grid-cols-4 gap-3">
                 {[
                   { label: "Total", value: data.total_invoices ?? 0 },
-                  { label: "Succeeded", value: data.success_count ?? 0, color: "text-emerald-400" },
-                  { label: "Failed", value: data.failed_count ?? 0, color: (data.failed_count ?? 0) > 0 ? "text-rose-400" : undefined },
+                  { label: "Succeeded", value: data.success_count ?? 0, color: "text-emerald-700" },
+                  { label: "Failed", value: data.failed_count ?? 0, color: (data.failed_count ?? 0) > 0 ? "text-red-600" : undefined },
                 ].map(({ label, value, color }) => (
-                  <div key={label} className="rounded-xl bg-white/[0.03] border border-white/[0.06] px-4 py-3">
-                    <p className="text-[11px] text-slate-500 uppercase tracking-wide">{label}</p>
-                    <p className={`text-2xl font-bold mt-0.5 ${color ?? "text-white"}`}>{value}</p>
+                  <div key={label} className="rounded-xl bg-gray-50 border border-gray-200 px-4 py-3">
+                    <p className="text-[11px] text-gray-400 uppercase tracking-wide">{label}</p>
+                    <p className={`text-2xl font-bold mt-0.5 ${color ?? "text-gray-900"}`}>{value}</p>
                   </div>
                 ))}
-                <div className="rounded-xl bg-white/[0.03] border border-white/[0.06] px-4 py-3 flex items-center">
+                <div className="rounded-xl bg-gray-50 border border-gray-200 px-4 py-3 flex items-center">
                   <StatusBadge status={data.status} />
                 </div>
               </div>
@@ -518,25 +518,25 @@ function HistoryDetailModal({ uploadId, onClose }: { uploadId: number; onClose: 
               {/* Errors */}
               {data.errors.length > 0 && (
                 <ul className="space-y-1.5">
-                  {data.errors.map((e, i) => <li key={i} className="text-xs text-amber-400/90 rounded-lg bg-amber-500/5 border border-amber-500/20 px-3 py-2">{e}</li>)}
+                  {data.errors.map((e, i) => <li key={i} className="text-xs text-amber-700/90 rounded-lg bg-amber-500/5 border border-amber-200 px-3 py-2">{e}</li>)}
                 </ul>
               )}
 
               {/* Invoice table */}
               {data.generated_invoices.length > 0 && (
                 <div>
-                  <p className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-2">Invoices Created</p>
-                  <div className="rounded-xl border border-white/[0.07] overflow-hidden">
-                    <div className="grid grid-cols-[5rem_minmax(0,2fr)_minmax(0,1.5fr)_8rem_6rem] px-4 py-2.5 border-b border-white/[0.06] text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-2">Invoices Created</p>
+                  <div className="rounded-xl border border-gray-200 overflow-hidden">
+                    <div className="grid grid-cols-[5rem_minmax(0,2fr)_minmax(0,1.5fr)_8rem_6rem] px-4 py-2.5 border-b border-gray-200 text-[10px] font-semibold uppercase tracking-wide text-gray-400">
                       <span>INV #</span><span>Customer</span><span>Group</span><span className="text-right">Delivery Date</span><span className="text-right">Status</span>
                     </div>
-                    <div className="divide-y divide-white/[0.04]">
+                    <div className="divide-y divide-gray-100">
                       {data.generated_invoices.map((inv) => (
                         <div key={inv.id} className="grid grid-cols-[5rem_minmax(0,2fr)_minmax(0,1.5fr)_8rem_6rem] px-4 py-2.5 items-center">
-                          <span className="text-slate-300 text-xs font-mono">{inv.invoice_number ?? "—"}</span>
-                          <span className="text-white text-sm truncate pr-3">{inv.customer_name ?? "—"}</span>
-                          <span className="text-slate-500 text-xs truncate pr-3">{inv.center_group_name}</span>
-                          <span className="text-slate-300 text-xs text-right">
+                          <span className="text-gray-600 text-xs font-mono">{inv.invoice_number ?? "—"}</span>
+                          <span className="text-gray-900 text-sm truncate pr-3">{inv.customer_name ?? "—"}</span>
+                          <span className="text-gray-400 text-xs truncate pr-3">{inv.center_group_name}</span>
+                          <span className="text-gray-600 text-xs text-right">
                             {inv.sent_at ? new Date(inv.sent_at).toLocaleDateString("en-AU", { day: "2-digit", month: "short", year: "numeric" }) : "—"}
                           </span>
                           <div className="flex justify-end">
@@ -674,15 +674,15 @@ export default function ImportPage() {
       {historyDetailId !== null && <HistoryDetailModal uploadId={historyDetailId} onClose={() => setHistoryDetailId(null)} />}
 
       <div className="mb-6">
-        <h1 className="text-2xl font-bold text-white tracking-tight">Import</h1>
-        <p className="text-slate-500 text-sm mt-1">Generate QBO invoices from spreadsheet uploads.</p>
+        <h1 className="text-2xl font-bold text-gray-900 tracking-tight">Import</h1>
+        <p className="text-gray-400 text-sm mt-1">Generate QBO invoices from spreadsheet uploads.</p>
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-1 mb-6 p-1 rounded-xl border border-white/[0.07] w-fit" style={{ background: "var(--bg-card)" }}>
+      <div className="flex gap-1 mb-6 p-1 rounded-xl border border-gray-200 w-fit" style={{ background: "var(--bg-card)" }}>
         {(["generate", "history"] as const).map(tab => (
           <button key={tab} type="button" onClick={() => setActiveTab(tab)}
-            className={`px-5 py-2 rounded-lg text-sm font-semibold transition-colors ${activeTab === tab ? "bg-indigo-600 text-white shadow" : "text-slate-400 hover:text-white"}`}>
+            className={`px-5 py-2 rounded-lg text-sm font-semibold transition-colors ${activeTab === tab ? "bg-indigo-600 text-gray-900 shadow" : "text-gray-500 hover:text-gray-900"}`}>
             {tab === "generate" ? "Generate Invoice" : "Recent History"}
           </button>
         ))}
@@ -703,8 +703,8 @@ export default function ImportPage() {
           )}
 
           {stage.type === "previewing" && (
-            <div className="text-center py-16 text-slate-500 text-sm flex flex-col items-center gap-3">
-              <svg className="w-6 h-6 animate-spin text-indigo-400" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9" /></svg>
+            <div className="text-center py-16 text-gray-400 text-sm flex flex-col items-center gap-3">
+              <svg className="w-6 h-6 animate-spin text-indigo-600" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9" /></svg>
               Building preview…
             </div>
           )}
@@ -719,29 +719,29 @@ export default function ImportPage() {
           )}
 
           {stage.type === "submitting" && (
-            <div className="text-center py-16 text-slate-500 text-sm flex flex-col items-center gap-3">
-              <svg className="w-6 h-6 animate-spin text-indigo-400" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9" /></svg>
+            <div className="text-center py-16 text-gray-400 text-sm flex flex-col items-center gap-3">
+              <svg className="w-6 h-6 animate-spin text-indigo-600" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9" /></svg>
               Submitting…
             </div>
           )}
 
           {stage.type === "processing" && (
-            <div className="rounded-2xl border border-indigo-500/20 bg-indigo-500/5 p-8 flex flex-col items-center gap-4 text-center">
-              <div className="w-14 h-14 rounded-2xl bg-indigo-500/15 border border-indigo-500/25 flex items-center justify-center">
-                <svg className="w-7 h-7 animate-spin text-indigo-400" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+            <div className="rounded-2xl border border-indigo-200 bg-indigo-500/5 p-8 flex flex-col items-center gap-4 text-center">
+              <div className="w-14 h-14 rounded-2xl bg-indigo-500/15 border border-indigo-200 flex items-center justify-center">
+                <svg className="w-7 h-7 animate-spin text-indigo-600" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
                   <path strokeLinecap="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9" />
                 </svg>
               </div>
               <div>
-                <p className="text-white font-semibold text-lg">Processing in background</p>
-                <p className="text-slate-400 text-sm mt-1">
+                <p className="text-gray-900 font-semibold text-lg">Processing in background</p>
+                <p className="text-gray-500 text-sm mt-1">
                   Your invoices are being created and sent in QBO. This may take a minute.
                 </p>
-                <p className="text-slate-500 text-xs mt-2">
+                <p className="text-gray-400 text-xs mt-2">
                   Job #{stage.uploadId} · Check the bell icon for updates
                 </p>
               </div>
-              <div className="flex items-center gap-1.5 text-indigo-400 text-xs">
+              <div className="flex items-center gap-1.5 text-indigo-600 text-xs">
                 <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-pulse" />
                 Checking every 3 seconds…
               </div>
@@ -758,35 +758,35 @@ export default function ImportPage() {
       {activeTab === "history" && (
         <div>
           <div className="flex items-center justify-between mb-4">
-            <p className="text-xs text-slate-500">Last 50 uploads</p>
-            <button type="button" onClick={() => void loadHistory()} disabled={historyLoading} className="text-xs text-indigo-400 hover:text-indigo-300 disabled:opacity-50 transition-colors flex items-center gap-1">
+            <p className="text-xs text-gray-400">Last 50 uploads</p>
+            <button type="button" onClick={() => void loadHistory()} disabled={historyLoading} className="text-xs text-indigo-600 hover:text-indigo-600 disabled:opacity-50 transition-colors flex items-center gap-1">
               {historyLoading && <svg className="w-3 h-3 animate-spin" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9" /></svg>}
               Refresh
             </button>
           </div>
-          {historyError && <p className="text-rose-400 text-sm mb-4">{historyError}</p>}
-          <div className="rounded-2xl border border-white/[0.07] overflow-hidden" style={{ background: "var(--bg-card)" }}>
-            <div className="grid grid-cols-[minmax(0,2fr)_minmax(0,1.5fr)_8rem_3.5rem_3.5rem_6rem_5rem] px-5 py-3 border-b border-white/[0.06] text-[10px] font-semibold uppercase tracking-wide text-slate-500">
-              <span>File</span><span>Uploaded by</span><span>Date</span><span className="text-center">Total</span><span className="text-center text-emerald-500">OK</span><span className="text-center text-rose-500">Failed</span><span className="text-center">Status</span>
+          {historyError && <p className="text-red-600 text-sm mb-4">{historyError}</p>}
+          <div className="rounded-2xl border border-gray-200 overflow-hidden" style={{ background: "var(--bg-card)" }}>
+            <div className="grid grid-cols-[minmax(0,2fr)_minmax(0,1.5fr)_8rem_3.5rem_3.5rem_6rem_5rem] px-5 py-3 border-b border-gray-200 text-[10px] font-semibold uppercase tracking-wide text-gray-400">
+              <span>File</span><span>Uploaded by</span><span>Date</span><span className="text-center">Total</span><span className="text-center text-emerald-500">OK</span><span className="text-center text-red-600">Failed</span><span className="text-center">Status</span>
             </div>
-            {historyLoading && history.length === 0 ? <p className="text-slate-500 text-sm text-center py-10">Loading…</p>
-              : history.length === 0 ? <p className="text-slate-500 text-sm text-center py-10">No uploads yet.</p>
+            {historyLoading && history.length === 0 ? <p className="text-gray-400 text-sm text-center py-10">Loading…</p>
+              : history.length === 0 ? <p className="text-gray-400 text-sm text-center py-10">No uploads yet.</p>
               : (
-                <ul className="divide-y divide-white/[0.04]">
+                <ul className="divide-y divide-gray-100">
                   {history.map(row => (
                     <li key={row.id} onClick={() => setHistoryDetailId(row.id)}
-                      className="grid grid-cols-[minmax(0,2fr)_minmax(0,1.5fr)_8rem_3.5rem_3.5rem_6rem_5rem] px-5 py-3.5 items-center cursor-pointer hover:bg-white/[0.03] transition-colors">
+                      className="grid grid-cols-[minmax(0,2fr)_minmax(0,1.5fr)_8rem_3.5rem_3.5rem_6rem_5rem] px-5 py-3.5 items-center cursor-pointer hover:bg-gray-50 transition-colors">
                       <div className="flex items-center gap-2.5 min-w-0 pr-3">
-                        <div className="w-7 h-7 rounded-lg bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center shrink-0">
-                          <svg className="w-3.5 h-3.5 text-indigo-400" fill="none" stroke="currentColor" strokeWidth={1.8} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
+                        <div className="w-7 h-7 rounded-lg bg-indigo-50 border border-indigo-200 flex items-center justify-center shrink-0">
+                          <svg className="w-3.5 h-3.5 text-indigo-600" fill="none" stroke="currentColor" strokeWidth={1.8} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
                         </div>
-                        <span className="text-white text-sm truncate">{row.file_name}</span>
+                        <span className="text-gray-900 text-sm truncate">{row.file_name}</span>
                       </div>
-                      <span className="text-slate-400 text-xs truncate pr-3">{row.uploaded_by ?? "—"}</span>
-                      <span className="text-slate-500 text-xs">{fmtDate(row.created_at)}</span>
-                      <span className="text-slate-300 text-sm font-medium text-center">{row.total_invoices ?? "—"}</span>
-                      <span className="text-emerald-400 text-sm font-medium text-center">{row.success_count ?? "—"}</span>
-                      <span className={`text-sm font-medium text-center ${(row.failed_count ?? 0) > 0 ? "text-rose-400" : "text-slate-600"}`}>{row.failed_count ?? "—"}</span>
+                      <span className="text-gray-500 text-xs truncate pr-3">{row.uploaded_by ?? "—"}</span>
+                      <span className="text-gray-400 text-xs">{fmtDate(row.created_at)}</span>
+                      <span className="text-gray-600 text-sm font-medium text-center">{row.total_invoices ?? "—"}</span>
+                      <span className="text-emerald-700 text-sm font-medium text-center">{row.success_count ?? "—"}</span>
+                      <span className={`text-sm font-medium text-center ${(row.failed_count ?? 0) > 0 ? "text-red-600" : "text-gray-400"}`}>{row.failed_count ?? "—"}</span>
                       <div className="flex justify-center"><StatusBadge status={row.status} /></div>
                     </li>
                   ))}

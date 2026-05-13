@@ -6,9 +6,9 @@ import Link from "next/link";
 import { apiGet, type CustomerRow } from "@/lib/api";
 
 function statusStyle(s: string) {
-  if (s === "approved") return { label: "Approved", cls: "text-emerald-400 bg-emerald-400/10 border-emerald-400/20" };
-  if (s === "rejected") return { label: "Rejected", cls: "text-red-400 bg-red-400/10 border-red-400/20" };
-  return { label: "Pending", cls: "text-amber-400 bg-amber-400/10 border-amber-400/20" };
+  if (s === "approved") return { label: "Approved", cls: "text-emerald-700 bg-emerald-50 border-emerald-200" };
+  if (s === "rejected") return { label: "Rejected", cls: "text-red-600 bg-red-400/10 border-red-400/20" };
+  return { label: "Pending", cls: "text-amber-700 bg-amber-50 border-amber-200" };
 }
 
 function fmt(iso: string) {
@@ -19,16 +19,16 @@ function InfoField({ label, value }: { label: string; value: React.ReactNode }) 
   if (!value) return null;
   return (
     <div>
-      <p className="text-xs font-semibold uppercase tracking-wider text-slate-600 mb-0.5">{label}</p>
-      <p className="text-sm text-slate-200">{value}</p>
+      <p className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-0.5">{label}</p>
+      <p className="text-sm text-gray-700">{value}</p>
     </div>
   );
 }
 
 function InfoSection({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div className="rounded-xl border border-white/[0.07] p-5" style={{ background: "rgba(255,255,255,0.02)" }}>
-      <p className="text-xs font-bold uppercase tracking-widest text-slate-500 mb-4">{title}</p>
+    <div className="rounded-xl border border-gray-200 p-5" style={{ background: "var(--surface-2)" }}>
+      <p className="text-xs font-bold uppercase tracking-widest text-gray-400 mb-4">{title}</p>
       <div className="grid grid-cols-2 md:grid-cols-3 gap-4">{children}</div>
     </div>
   );
@@ -52,14 +52,14 @@ export default function CustomerDetailPage() {
   }, [customerId]);
 
   if (loading) {
-    return <div className="max-w-4xl mx-auto py-12 text-center text-slate-500 text-sm">Loading…</div>;
+    return <div className="max-w-4xl mx-auto py-12 text-center text-gray-400 text-sm">Loading…</div>;
   }
 
   if (error || !customer) {
     return (
       <div className="max-w-4xl mx-auto py-12 text-center">
-        <p className="text-rose-400 text-sm">{error ?? "Customer not found."}</p>
-        <button onClick={() => router.push("/customers")} className="mt-4 text-indigo-400 text-sm hover:underline">← Back to Customers</button>
+        <p className="text-red-600 text-sm">{error ?? "Customer not found."}</p>
+        <button onClick={() => router.push("/customers")} className="mt-4 text-indigo-600 text-sm hover:underline">← Back to Customers</button>
       </div>
     );
   }
@@ -68,7 +68,7 @@ export default function CustomerDetailPage() {
 
   return (
     <div className="max-w-4xl mx-auto animate-fadeInUp">
-      <Link href="/customers" className="inline-flex items-center gap-1.5 text-slate-500 hover:text-slate-300 text-sm mb-5 transition-colors">
+      <Link href="/customers" className="inline-flex items-center gap-1.5 text-gray-400 hover:text-gray-600 text-sm mb-5 transition-colors">
         <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
         </svg>
@@ -76,12 +76,12 @@ export default function CustomerDetailPage() {
       </Link>
 
       <div className="flex items-center gap-4 mb-6">
-        <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-indigo-500/30 to-violet-600/30 border border-indigo-500/30 flex items-center justify-center text-indigo-400 text-xl font-bold shrink-0">
+        <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-indigo-500/30 to-violet-600/30 border border-indigo-200 flex items-center justify-center text-indigo-600 text-xl font-bold shrink-0">
           {customer.display_name[0]?.toUpperCase() ?? "?"}
         </div>
         <div>
-          <h1 className="text-2xl font-bold text-white tracking-tight">{customer.display_name}</h1>
-          {customer.company_name && <p className="text-slate-400 text-sm">{customer.company_name}</p>}
+          <h1 className="text-2xl font-bold text-gray-900 tracking-tight">{customer.display_name}</h1>
+          {customer.company_name && <p className="text-gray-500 text-sm">{customer.company_name}</p>}
         </div>
       </div>
 
@@ -92,7 +92,7 @@ export default function CustomerDetailPage() {
           <InfoField label="Given Name" value={[customer.title, customer.given_name, customer.middle_name, customer.family_name, customer.suffix].filter(Boolean).join(" ")} />
           <InfoField label="Print On Check" value={customer.print_on_check_name} />
           <div>
-            <p className="text-xs font-semibold uppercase tracking-wider text-slate-600 mb-0.5">Status</p>
+            <p className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-0.5">Status</p>
             <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold border ${ss.cls}`}>{ss.label}</span>
           </div>
           <InfoField label="QBO ID" value={customer.qbo_id} />
@@ -108,8 +108,8 @@ export default function CustomerDetailPage() {
           <InfoField label="Website" value={customer.website} />
           <InfoField label="Other Contact" value={customer.other_contact} />
           <div>
-            <p className="text-xs font-semibold uppercase tracking-wider text-slate-600 mb-0.5">Attachment in Mail</p>
-            <span className={`text-sm font-semibold ${customer.add_attachment_in_mail ? "text-emerald-400" : "text-slate-500"}`}>
+            <p className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-0.5">Attachment in Mail</p>
+            <span className={`text-sm font-semibold ${customer.add_attachment_in_mail ? "text-emerald-700" : "text-gray-400"}`}>
               {customer.add_attachment_in_mail ? "Yes" : "No"}
             </span>
           </div>
@@ -138,7 +138,7 @@ export default function CustomerDetailPage() {
         {customer.notes && (
           <InfoSection title="Notes">
             <div className="col-span-full">
-              <p className="text-sm text-slate-300 whitespace-pre-wrap">{customer.notes}</p>
+              <p className="text-sm text-gray-600 whitespace-pre-wrap">{customer.notes}</p>
             </div>
           </InfoSection>
         )}

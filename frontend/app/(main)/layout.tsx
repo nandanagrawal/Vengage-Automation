@@ -6,18 +6,15 @@ import QboGuard from "@/app/components/QboGuard";
 export default function MainLayout({ children }: { children: React.ReactNode }) {
   return (
     <QboGuard>
-      <div className="flex flex-col h-screen overflow-hidden" style={{ background: "var(--bg-deep)" }}>
-        <Navbar />
-
-        <div className="flex flex-1 overflow-hidden">
-          <Sidebar />
-
-          <main className="flex-1 overflow-y-auto dot-grid">
-            <div className="p-8">{children}</div>
+      <div className="app-shell">
+        <Sidebar />
+        <div className="app-main">
+          <Navbar />
+          <main className="app-content">
+            {children}
           </main>
+          <AppFooter />
         </div>
-
-        <AppFooter />
       </div>
     </QboGuard>
   );

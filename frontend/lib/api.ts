@@ -206,13 +206,6 @@ export type InvoiceRow = {
   updated_at: string;
 };
 
-export type InvoiceActivityRow = {
-  customer_display_name: string;
-  invoice_number: string;
-  email_status: string;
-  txn_date?: string | null;
-};
-
 export type SyncResult = {
   customers_pulled: number;
   customers_pushed: number;

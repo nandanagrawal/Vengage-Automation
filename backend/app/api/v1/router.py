@@ -1,7 +1,6 @@
 from fastapi import APIRouter
 
 from app.api.v1.endpoints import (
-    activity,
     auth,
     auth_qbo,
     centers,
@@ -30,5 +29,4 @@ api_router.include_router(invoices.router, tags=["invoices"])
 api_router.include_router(invoice_uploads.router, tags=["invoice-uploads"])
 api_router.include_router(service_codes.router, tags=["service-codes"])
 api_router.include_router(sync.router, tags=["sync"])
-api_router.include_router(activity.router, tags=["activity"])
 api_router.include_router(webhooks.router, tags=["webhooks"])

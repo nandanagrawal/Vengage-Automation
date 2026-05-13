@@ -122,11 +122,11 @@ function customerToForm(c: CustomerRow): CustomerFormValues {
 }
 
 function fieldCls() {
-  return "w-full rounded-lg bg-white/[0.04] border border-white/[0.08] px-3 py-2 text-sm text-white placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-indigo-500/40";
+  return "w-full rounded-lg bg-gray-50 border border-gray-200 px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-200";
 }
 
 function labelCls() {
-  return "block text-[11px] font-semibold uppercase tracking-wide text-slate-500 mb-1";
+  return "block text-[11px] font-semibold uppercase tracking-wide text-gray-400 mb-1";
 }
 
 function Section({
@@ -135,12 +135,12 @@ function Section({
   title: string; icon: ReactNode; open: boolean; onToggle: () => void; children: ReactNode;
 }) {
   return (
-    <div className="rounded-xl border border-white/[0.07] overflow-hidden" style={{ background: "var(--bg-card)" }}>
-      <button type="button" onClick={onToggle} className="w-full flex items-center justify-between px-4 py-3 text-left hover:bg-white/[0.03]">
-        <span className="flex items-center gap-2 text-sm font-semibold text-white">{icon}{title}</span>
-        <span className="text-slate-500 text-xs">{open ? "▾" : "▸"}</span>
+    <div className="rounded-xl border border-gray-200 overflow-hidden" style={{ background: "var(--bg-card)" }}>
+      <button type="button" onClick={onToggle} className="w-full flex items-center justify-between px-4 py-3 text-left hover:bg-gray-50">
+        <span className="flex items-center gap-2 text-sm font-semibold text-gray-900">{icon}{title}</span>
+        <span className="text-gray-400 text-xs">{open ? "▾" : "▸"}</span>
       </button>
-      {open && <div className="px-4 pb-4 pt-1 border-t border-white/[0.06]">{children}</div>}
+      {open && <div className="px-4 pb-4 pt-1 border-t border-gray-200">{children}</div>}
     </div>
   );
 }
@@ -364,19 +364,20 @@ export function CustomerModal({
   const activeServiceCodes = serviceCodeOptions.filter((sc) => sc.status);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-fadeInUp">
-      <div className="w-full max-w-4xl max-h-[90vh] overflow-y-auto rounded-2xl border border-white/[0.1] shadow-2xl" style={{ background: "var(--bg-deep)" }}>
-        <div className="sticky top-0 z-10 flex items-center justify-between px-6 py-4 border-b border-white/[0.08] bg-[rgba(15,18,32,0.95)]">
-          <div>
-            <h2 className="text-lg font-bold text-white">{mode === "edit" ? "Edit Customer" : "Add Customer"}</h2>
-            <p className="text-xs text-slate-500 mt-0.5">Aligned with QuickBooks Online — Name, addresses, notes, and app extensions.</p>
-          </div>
-          <button type="button" onClick={resetAndClose} className="text-slate-400 hover:text-white text-sm">Close</button>
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/30 backdrop-blur-sm animate-fadeInUp">
+      <div className="w-full max-w-4xl max-h-[90vh] overflow-y-auto rounded-2xl border border-gray-200 shadow-2xl" style={{ background: "var(--surface)" }}>
+        <div className="sticky top-0 z-10 flex items-center justify-between px-6 py-4 border-b border-gray-200" style={{ background: "var(--surface)" }}>
+          <h2 className="text-base font-700 text-gray-900" style={{ fontWeight: 700 }}>{mode === "edit" ? "Edit Customer" : "Add Customer"}</h2>
+          <button type="button" onClick={resetAndClose} className="icon-btn">
+            <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
         </div>
 
         <form onSubmit={handleSubmit} className="p-6 space-y-4">
           {/* ── Name and contact ── */}
-          <Section title="Name and contact" open={openName} onToggle={() => setOpenName(!openName)} icon={<span className="text-indigo-400">◎</span>}>
+          <Section title="Name and contact" open={openName} onToggle={() => setOpenName(!openName)} icon={<span className="text-indigo-600">◎</span>}>
             <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-3">
               {([
                 ["Title", "title", form.title],
@@ -397,7 +398,7 @@ export function CustomerModal({
                 <input className={fieldCls()} value={form.company_name} onChange={(e) => update("company_name", e.target.value)} />
               </div>
               <div>
-                <label className={labelCls()}>Customer display name <span className="text-rose-400">*</span></label>
+                <label className={labelCls()}>Customer display name <span className="text-red-600">*</span></label>
                 <input required className={fieldCls()} value={form.display_name} onChange={(e) => update("display_name", e.target.value)} placeholder={displayPreview || "Required"} />
               </div>
             </div>
@@ -453,10 +454,10 @@ export function CustomerModal({
             onToggle={() => setOpenCenters(!openCenters)}
             icon={<span className="text-sky-400">⌁</span>}
           >
-            <p className="text-[11px] text-slate-600 mb-2">
+            <p className="text-[11px] text-gray-400 mb-2">
               Add one or more centers for this company. They are saved with the customer and can be combined on invoices.
             </p>
-            {centersLoadError && <p className="text-xs text-rose-400 mb-2">{centersLoadError}</p>}
+            {centersLoadError && <p className="text-xs text-red-600 mb-2">{centersLoadError}</p>}
             <div className="space-y-2">
               {centerLines.map((line) => (
                 <div key={line.key} className="flex gap-2 items-center">
@@ -473,7 +474,7 @@ export function CustomerModal({
                   <button
                     type="button"
                     onClick={() => removeCenterLine(line)}
-                    className="shrink-0 text-slate-500 hover:text-red-400 px-2 text-sm"
+                    className="shrink-0 text-gray-400 hover:text-red-600 px-2 text-sm"
                     aria-label="Remove center"
                   >
                     ✕
@@ -483,7 +484,7 @@ export function CustomerModal({
             </div>
             <button
               type="button"
-              className="mt-3 text-sm font-semibold text-indigo-400 hover:text-indigo-300"
+              className="mt-3 text-sm font-semibold text-indigo-600 hover:text-indigo-600"
               onClick={() => setCenterLines((rows) => [...rows, newCenterLine()])}
             >
               Add Center
@@ -491,8 +492,8 @@ export function CustomerModal({
           </Section>
 
           {/* ── Addresses ── */}
-          <Section title="Addresses" open={openAddr} onToggle={() => setOpenAddr(!openAddr)} icon={<span className="text-emerald-400">📍</span>}>
-            <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Billing address</p>
+          <Section title="Addresses" open={openAddr} onToggle={() => setOpenAddr(!openAddr)} icon={<span className="text-emerald-700">📍</span>}>
+            <p className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Billing address</p>
             <div className="grid md:grid-cols-2 gap-3 mb-2">
               <div className="md:col-span-2">
                 <label className={labelCls()}>Street address 1</label>
@@ -520,14 +521,14 @@ export function CustomerModal({
               </div>
             </div>
 
-            <label className="flex items-center gap-2 text-sm text-slate-300 mt-4 mb-2 cursor-pointer">
+            <label className="flex items-center gap-2 text-sm text-gray-600 mt-4 mb-2 cursor-pointer">
               <input type="checkbox" className="rounded border-white/20" checked={form.ship_same_as_billing} onChange={(e) => update("ship_same_as_billing", e.target.checked)} />
               Same as billing address
             </label>
 
             {!form.ship_same_as_billing && (
               <div className="grid md:grid-cols-2 gap-3">
-                <p className="md:col-span-2 text-xs font-bold text-slate-500 uppercase tracking-wider">Shipping address</p>
+                <p className="md:col-span-2 text-xs font-bold text-gray-400 uppercase tracking-wider">Shipping address</p>
                 <div className="md:col-span-2">
                   <label className={labelCls()}>Street address 1</label>
                   <input className={fieldCls()} value={form.shipping_line1} onChange={(e) => update("shipping_line1", e.target.value)} />
@@ -557,7 +558,7 @@ export function CustomerModal({
           </Section>
 
           {/* ── Notes ── */}
-          <Section title="Notes" open={openNotes} onToggle={() => setOpenNotes(!openNotes)} icon={<span className="text-amber-400">✎</span>}>
+          <Section title="Notes" open={openNotes} onToggle={() => setOpenNotes(!openNotes)} icon={<span className="text-amber-700">✎</span>}>
             <label className={labelCls()}>Notes</label>
             <textarea rows={3} className={`${fieldCls()} resize-y`} value={form.notes} onChange={(e) => update("notes", e.target.value)} />
           </Section>
@@ -568,20 +569,20 @@ export function CustomerModal({
             {/* Services table */}
             <div className="mb-5">
               <label className={labelCls()}>Services &amp; rates</label>
-              <p className="text-[11px] text-slate-600 mb-2">
+              <p className="text-[11px] text-gray-400 mb-2">
                 Select a product/service, set the rate, and pick a service code. Rate must be &gt; 0. Each service can only appear once.
               </p>
 
               {serviceRows.length > 0 && (
-                <div className="rounded-lg border border-white/[0.08] bg-white/[0.02] overflow-hidden mb-2">
+                <div className="rounded-lg border border-gray-200 bg-gray-50 overflow-hidden mb-2">
                   {/* Header */}
-                  <div className="grid grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1.5fr)_2rem] gap-2 px-3 py-2 border-b border-white/[0.06]">
-                    <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Service</span>
-                    <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Rate</span>
-                    <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Service Code</span>
+                  <div className="grid grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1.5fr)_2rem] gap-2 px-3 py-2 border-b border-gray-200">
+                    <span className="text-[10px] font-semibold uppercase tracking-wider text-gray-400">Service</span>
+                    <span className="text-[10px] font-semibold uppercase tracking-wider text-gray-400">Rate</span>
+                    <span className="text-[10px] font-semibold uppercase tracking-wider text-gray-400">Service Code</span>
                     <span />
                   </div>
-                  <div className="divide-y divide-white/[0.04]">
+                  <div className="divide-y divide-gray-100">
                     {serviceRows.map((row) => (
                       <div key={row.key} className="grid grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1.5fr)_2rem] gap-2 px-3 py-2 items-center">
                         {/* Product dropdown */}
@@ -591,9 +592,9 @@ export function CustomerModal({
                             const v = e.target.value;
                             updateServiceRow(row.key, { product_and_service_id: v === "" ? "" : Number(v) });
                           }}
-                          className="rounded-lg bg-[#1a1d2e] border border-white/[0.08] px-2 py-1.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-indigo-500/40 appearance-none"
+                          className="rounded-lg bg-white border border-gray-200 px-2 py-1.5 text-xs text-gray-900 focus:outline-none focus:ring-1 focus:ring-indigo-200 appearance-none"
                         >
-                          <option value="" style={{ background: "#1a1d2e", color: "#94a3b8" }}>Select…</option>
+                          <option value="" style={{ background: "white", color: "var(--text-4)" }}>Select…</option>
                           {activeProducts.map((p) => {
                             const isUsedElsewhere = usedProductIds.has(p.id) && row.product_and_service_id !== p.id;
                             return (
@@ -601,7 +602,7 @@ export function CustomerModal({
                                 key={p.id}
                                 value={p.id}
                                 disabled={isUsedElsewhere}
-                                style={{ background: "#1a1d2e", color: isUsedElsewhere ? "#64748b" : "#f1f5f9" }}
+                                style={{ background: "white", color: "var(--text-2)" }}
                               >
                                 {p.name}
                               </option>
@@ -617,7 +618,7 @@ export function CustomerModal({
                           placeholder="0.00"
                           value={row.rate}
                           onChange={(e) => updateServiceRow(row.key, { rate: e.target.value })}
-                          className="rounded-lg bg-[#1a1d2e] border border-white/[0.08] px-2 py-1.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-indigo-500/40"
+                          className="rounded-lg bg-white border border-gray-200 px-2 py-1.5 text-xs text-gray-900 focus:outline-none focus:ring-1 focus:ring-indigo-200"
                         />
 
                         {/* Service code dropdown */}
@@ -627,11 +628,11 @@ export function CustomerModal({
                             const v = e.target.value;
                             updateServiceRow(row.key, { service_code_id: v === "" ? "" : Number(v) });
                           }}
-                          className="rounded-lg bg-[#1a1d2e] border border-white/[0.08] px-2 py-1.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-indigo-500/40 appearance-none"
+                          className="rounded-lg bg-white border border-gray-200 px-2 py-1.5 text-xs text-gray-900 focus:outline-none focus:ring-1 focus:ring-indigo-200 appearance-none"
                         >
-                          <option value="" style={{ background: "#1a1d2e", color: "#94a3b8" }}>Select…</option>
+                          <option value="" style={{ background: "white", color: "var(--text-4)" }}>Select…</option>
                           {activeServiceCodes.map((sc) => (
-                            <option key={sc.id} value={sc.id} style={{ background: "#1a1d2e", color: "#f1f5f9" }}>
+                            <option key={sc.id} value={sc.id} style={{ background: "white", color: "var(--text-1)" }}>
                               {sc.code}
                             </option>
                           ))}
@@ -641,7 +642,7 @@ export function CustomerModal({
                         <button
                           type="button"
                           onClick={() => removeServiceRow(row.key)}
-                          className="text-slate-600 hover:text-red-400 text-sm transition-colors"
+                          className="text-gray-400 hover:text-red-600 text-sm transition-colors"
                           aria-label="Remove service row"
                         >
                           ✕
@@ -654,24 +655,24 @@ export function CustomerModal({
 
               <button
                 type="button"
-                className="text-sm font-semibold text-indigo-400 hover:text-indigo-300"
+                className="text-sm font-semibold text-indigo-600 hover:text-indigo-600"
                 onClick={() => setServiceRows((rows) => [...rows, newServiceRow()])}
               >
                 + Add service
               </button>
 
               {activeProducts.length === 0 && (
-                <p className="text-[11px] text-amber-400/80 mt-1.5">No active products found — run Sync to pull from QuickBooks.</p>
+                <p className="text-[11px] text-amber-700/80 mt-1.5">No active products found — run Sync to pull from QuickBooks.</p>
               )}
               {activeServiceCodes.length === 0 && (
-                <p className="text-[11px] text-amber-400/80 mt-1">No active service codes — add them in Configuration → Service Code.</p>
+                <p className="text-[11px] text-amber-700/80 mt-1">No active service codes — add them in Configuration → Service Code.</p>
               )}
             </div>
 
             {/* Customer Types */}
             <div className="mb-4">
               <label className={labelCls()}>Customer types</label>
-              {createTypeError && <p className="text-xs text-rose-400 mb-1">{createTypeError}</p>}
+              {createTypeError && <p className="text-xs text-red-600 mb-1">{createTypeError}</p>}
               {(() => {
                 const assignedIds = new Set(selectedCustomerTypeIds);
                 const visibleTypes = mode === "edit"
@@ -680,14 +681,14 @@ export function CustomerModal({
                 return (
                   <>
                     {visibleTypes.length === 0 && (
-                      <p className="text-xs text-slate-600 py-1">No active customer types. Create one below.</p>
+                      <p className="text-xs text-gray-400 py-1">No active customer types. Create one below.</p>
                     )}
                     {visibleTypes.length > 0 && (
-                      <div className="max-h-36 overflow-y-auto rounded-lg border border-white/[0.08] bg-white/[0.02] px-3 py-2 space-y-1.5 mb-2">
+                      <div className="max-h-36 overflow-y-auto rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 space-y-1.5 mb-2">
                         {visibleTypes.map((ct) => (
                           <label
                             key={ct.id}
-                            className={`flex items-center gap-2.5 text-sm ${ct.status ? "cursor-pointer text-slate-300" : "cursor-pointer text-slate-500"}`}
+                            className={`flex items-center gap-2.5 text-sm ${ct.status ? "cursor-pointer text-gray-600" : "cursor-pointer text-gray-400"}`}
                           >
                             <input
                               type="checkbox"
@@ -701,7 +702,7 @@ export function CustomerModal({
                             />
                             <span className={ct.status ? "" : "line-through"}>{ct.name}</span>
                             {!ct.status && (
-                              <span className="text-[9px] font-semibold uppercase tracking-wide text-slate-600 border border-white/[0.08] px-1 py-0.5 rounded">
+                              <span className="text-[9px] font-semibold uppercase tracking-wide text-gray-400 border border-gray-200 px-1 py-0.5 rounded">
                                 inactive
                               </span>
                             )}
@@ -712,7 +713,7 @@ export function CustomerModal({
                     {/* Inline create */}
                     <div className="flex gap-2 items-center">
                       <input
-                        className="flex-1 rounded-lg bg-white/[0.04] border border-white/[0.08] px-2 py-1.5 text-xs text-white placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-indigo-500/40"
+                        className="flex-1 rounded-lg bg-gray-50 border border-gray-200 px-2 py-1.5 text-xs text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-200"
                         placeholder="New type name…"
                         value={newTypeName}
                         onChange={(e) => setNewTypeName(e.target.value)}
@@ -739,7 +740,7 @@ export function CustomerModal({
                       <button
                         type="button"
                         disabled={!newTypeName.trim() || creatingType}
-                        className="text-xs font-semibold text-indigo-400 hover:text-indigo-300 disabled:opacity-40 shrink-0"
+                        className="text-xs font-semibold text-indigo-600 hover:text-indigo-600 disabled:opacity-40 shrink-0"
                         onClick={async () => {
                           const name = newTypeName.trim();
                           if (!name || creatingType) return;
@@ -760,7 +761,7 @@ export function CustomerModal({
                         {creatingType ? "Adding…" : "+ Add"}
                       </button>
                     </div>
-                    <p className="text-[10px] text-slate-700 mt-1">Press Enter or click + Add to create a new type inline.</p>
+                    <p className="text-[10px] text-gray-300 mt-1">Press Enter or click + Add to create a new type inline.</p>
                   </>
                 );
               })()}
@@ -776,15 +777,15 @@ export function CustomerModal({
                 >
                   <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform ${form.add_attachment_in_mail ? "translate-x-5" : "translate-x-0"}`} />
                 </div>
-                <span className="text-sm text-slate-300">Add attachment in mail</span>
+                <span className="text-sm text-gray-600">Add attachment in mail</span>
               </label>
-              <p className="text-[11px] text-slate-600 mt-1.5">Auto-attach Excel/PDF when sending invoices.</p>
+              <p className="text-[11px] text-gray-400 mt-1.5">Auto-attach Excel/PDF when sending invoices.</p>
             </div>
           </Section>
 
           <div className="flex justify-end gap-3 pt-2">
-            <button type="button" onClick={resetAndClose} className="px-4 py-2 rounded-xl text-sm text-slate-400 hover:text-white">Cancel</button>
-            <button type="submit" disabled={submitting} className="shimmer-btn px-5 py-2.5 rounded-xl text-white text-sm font-semibold disabled:opacity-50">
+            <button type="button" onClick={resetAndClose} className="px-4 py-2 rounded-xl text-sm text-gray-500 hover:text-gray-900">Cancel</button>
+            <button type="submit" disabled={submitting} className="shimmer-btn px-5 py-2.5 rounded-xl text-gray-900 text-sm font-semibold disabled:opacity-50">
               {submitting ? "Saving…" : mode === "edit" ? "Save changes" : "Save customer"}
             </button>
           </div>

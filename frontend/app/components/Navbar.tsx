@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 
 import { apiGet, qboConnectUrl, qboAuthDelete, type UploadDetailResponse } from "@/lib/api";
 import { useQboStatus } from "@/lib/useQboStatus";
@@ -10,33 +10,26 @@ import { useAuth } from "@/lib/useAuth";
 import { getJobs, updateJob, markNotified, type BackgroundJob } from "@/lib/jobQueue";
 
 const pageMeta: Record<string, { title: string; subtitle: string }> = {
-  "/dashboard": { title: "Dashboard",  subtitle: "Overview of your automation activity" },
-  "/customers": { title: "Customers",  subtitle: "Manage and review customer records" },
+  "/dashboard": { title: "Dashboard",     subtitle: "Overview of your automation activity" },
+  "/customers": { title: "Customers",     subtitle: "Manage and review customer records" },
   "/invoices":  { title: "Configuration", subtitle: "Group centers for invoice generation" },
-  "/import":    { title: "Import",     subtitle: "Upload and process invoice data" },
+  "/import":    { title: "Import",        subtitle: "Upload and process invoice data" },
+  "/settings":  { title: "Settings",      subtitle: "Manage your account and preferences" },
 };
-
-function BellIcon() {
-  return (
-    <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth={1.8} viewBox="0 0 24 24">
-      <path strokeLinecap="round" strokeLinejoin="round"
-        d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6 6 0 10-12 0v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
-    </svg>
-  );
-}
 
 export default function Navbar() {
   const pathname = usePathname();
   const meta = pageMeta[pathname] ?? { title: "Vengage", subtitle: "" };
+
   const [showDropdown, setShowDropdown] = useState(false);
   const [showBell, setShowBell] = useState(false);
   const [jobs, setJobs] = useState<BackgroundJob[]>([]);
+
   const { status } = useQboStatus();
   const { user, logout } = useAuth();
   const connected = status?.connected ?? false;
   const envLabel = (status?.environment ?? "sandbox").toLowerCase() === "sandbox" ? "Sandbox" : "Production";
 
-  // Poll background jobs every 4 seconds
   useEffect(() => {
     const poll = async () => {
       const current = getJobs();
@@ -64,176 +57,154 @@ export default function Navbar() {
   }, []);
 
   const processing = jobs.filter((j) => j.status === "processing").length;
-  const unnotified = jobs.filter((j) => j.status !== "processing" && !j.notified).length;
-  const bellBadge = processing > 0 ? processing : unnotified;
+  const unnotified  = jobs.filter((j) => j.status !== "processing" && !j.notified).length;
+  const bellBadge   = processing > 0 ? processing : unnotified;
 
   async function disconnectQbo() {
-    try {
-      await qboAuthDelete<{ disconnected?: boolean }>("/disconnect");
-      window.location.reload();
-    } catch {
-      /* ignore */
-    }
+    try { await qboAuthDelete<{ disconnected?: boolean }>("/disconnect"); window.location.reload(); }
+    catch { /* ignore */ }
     setShowDropdown(false);
   }
 
   return (
-    <header
-      className="h-16 shrink-0 flex items-center px-6 border-b border-white/[0.06] backdrop-blur-sm z-40"
-      style={{ background: "rgba(8,11,24,0.95)" }}
-    >
-      {/* Left — breadcrumb */}
-      <div className="flex items-center gap-2 text-sm min-w-0">
-        <Link href="/" className="text-slate-500 hover:text-slate-300 transition-colors shrink-0 text-xs font-medium">
-          Vengage
-        </Link>
-        <svg className="w-3.5 h-3.5 text-slate-700 shrink-0" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+    <header className="navbar">
+      {/* Breadcrumb */}
+      <div style={{ display: "flex", alignItems: "center", gap: 7, flex: 1, minWidth: 0, overflow: "hidden" }}>
+        <span style={{ fontSize: 12, color: "var(--text-3)", fontWeight: 500, whiteSpace: "nowrap" }}>Vengage</span>
+        <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.2" viewBox="0 0 24 24" style={{ color: "var(--text-4)", flexShrink: 0 }}>
           <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
         </svg>
-        <span className="text-white font-semibold truncate">{meta.title}</span>
+        <span style={{ fontSize: 15, fontWeight: 700, color: "var(--text-1)", whiteSpace: "nowrap" }}>{meta.title}</span>
         {meta.subtitle && (
           <>
-            <span className="hidden md:block text-slate-700 mx-1">·</span>
-            <span className="hidden md:block text-slate-500 text-xs truncate">{meta.subtitle}</span>
+            <span style={{ color: "var(--border)", fontSize: 16 }}>·</span>
+            <span style={{ fontSize: 12, color: "var(--text-3)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{meta.subtitle}</span>
           </>
         )}
       </div>
 
-      {/* Right — actions */}
-      <div className="ml-auto flex items-center gap-2">
-        {/* QuickBooks — OAuth sandbox/prod status (matches vengage-poc flow) */}
-        <div className="hidden sm:flex items-center gap-2">
-          <div
-            className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs ${
-              connected
-                ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-400/95"
-                : "border-white/[0.07] bg-white/[0.03] text-slate-400"
-            }`}
-          >
-            <span
-              className={`w-1.5 h-1.5 rounded-full shrink-0 ${connected ? "bg-emerald-400" : "bg-red-400 pulse-dot"}`}
-            />
-            <span className="whitespace-nowrap">
-              QBO {envLabel} · {connected ? "Connected" : "Disconnected"}
-            </span>
-          </div>
-          {!connected ? (
-            <button
-              type="button"
-              onClick={() => {
-                window.location.href = qboConnectUrl();
-              }}
-              className="px-3 py-1.5 rounded-lg text-xs font-medium bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 hover:bg-indigo-500/30 transition-colors"
-            >
-              Connect
-            </button>
-          ) : (
-            <button
-              type="button"
-              onClick={disconnectQbo}
-              className="px-3 py-1.5 rounded-lg text-xs font-medium text-slate-500 hover:text-slate-300 border border-white/[0.08] hover:bg-white/[0.05] transition-colors"
-            >
-              Disconnect
-            </button>
-          )}
+      {/* Right actions */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+        {/* QBO Status */}
+        <div className={`qbo-pill ${connected ? "qbo-connected" : "qbo-disconnected"}`}>
+          <span style={{ width: 6, height: 6, borderRadius: "50%", background: connected ? "var(--success)" : "var(--error)", flexShrink: 0 }} />
+          <span>QBO {envLabel} · {connected ? "Connected" : "Disconnected"}</span>
         </div>
+        {connected ? (
+          <button type="button" onClick={disconnectQbo} className="btn btn-ghost btn-sm">
+            Disconnect
+          </button>
+        ) : (
+          <button type="button" onClick={() => { window.location.href = qboConnectUrl(); }} className="btn btn-secondary btn-sm">
+            Connect
+          </button>
+        )}
 
-        {/* Notifications bell */}
-        <div className="relative">
+        {/* Bell */}
+        <div style={{ position: "relative" }}>
           <button
-            onClick={() => { setShowBell((v) => !v); jobs.filter((j) => !j.notified && j.status !== "processing").forEach((j) => markNotified(j.uploadId)); }}
-            className="relative w-9 h-9 rounded-lg border border-white/[0.07] bg-white/[0.03] hover:bg-white/[0.07] text-slate-400 hover:text-white flex items-center justify-center transition-all"
+            className="icon-btn"
+            style={{ position: "relative" }}
+            onClick={() => {
+              setShowBell((v) => !v);
+              setShowDropdown(false);
+              jobs.filter((j) => !j.notified && j.status !== "processing").forEach((j) => markNotified(j.uploadId));
+            }}
           >
-            <BellIcon />
+            <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6 6 0 10-12 0v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+            </svg>
             {bellBadge > 0 && (
-              <span className={`absolute top-1 right-1 min-w-[16px] h-4 px-0.5 rounded-full text-[9px] font-bold flex items-center justify-center text-white ${processing > 0 ? "bg-indigo-500" : "bg-emerald-500"}`}>
-                {bellBadge}
-              </span>
+              <span
+                style={{ position: "absolute", top: 7, right: 7, width: 7, height: 7, borderRadius: "50%", background: processing > 0 ? "var(--primary)" : "var(--success)", border: "2px solid white" }}
+              />
             )}
           </button>
 
           {showBell && (
             <>
-              <div className="fixed inset-0 z-40" onClick={() => setShowBell(false)} />
-              <div className="absolute right-0 top-11 w-72 rounded-xl border border-white/[0.08] shadow-2xl z-50 overflow-hidden" style={{ background: "#0F1225" }}>
-                <div className="px-4 py-3 border-b border-white/[0.06]">
-                  <p className="text-white text-sm font-semibold">Background Jobs</p>
+              <div style={{ position: "fixed", inset: 0, zIndex: 40 }} onClick={() => setShowBell(false)} />
+              <div className="dropdown" style={{ position: "absolute", right: 0, top: 44, width: 290, zIndex: 50 }}>
+                <div className="dropdown-header" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                  <span style={{ fontSize: 13, fontWeight: 700, color: "var(--text-1)" }}>Background Jobs</span>
                 </div>
-                {jobs.length === 0 ? (
-                  <p className="px-4 py-6 text-slate-500 text-xs text-center">No background jobs</p>
-                ) : (
-                  <ul className="divide-y divide-white/[0.05] max-h-72 overflow-y-auto">
-                    {jobs.map((j) => (
-                      <li key={j.uploadId} className="px-4 py-3 flex items-center gap-3">
-                        {j.status === "processing" ? (
-                          <svg className="w-4 h-4 animate-spin text-indigo-400 shrink-0" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9" /></svg>
-                        ) : j.status === "completed" ? (
-                          <span className="w-4 h-4 shrink-0 text-emerald-400 text-base">✓</span>
-                        ) : j.status === "completed_with_errors" ? (
-                          <span className="w-4 h-4 shrink-0 text-amber-400 text-base">⚠</span>
-                        ) : (
-                          <span className="w-4 h-4 shrink-0 text-rose-400 text-base">✕</span>
-                        )}
-                        <div className="min-w-0">
-                          <p className="text-white text-xs font-medium">Job #{j.uploadId}</p>
-                          <p className={`text-[11px] capitalize ${j.status === "processing" ? "text-indigo-400" : j.status === "completed" ? "text-emerald-400" : j.status === "failed" ? "text-rose-400" : "text-amber-400"}`}>
-                            {j.status.replace(/_/g, " ")}
-                          </p>
-                        </div>
-                        {j.status !== "processing" && (
-                          <Link href="/import" onClick={() => setShowBell(false)} className="ml-auto text-indigo-400 text-[11px] hover:underline shrink-0">View</Link>
-                        )}
-                      </li>
-                    ))}
-                  </ul>
-                )}
+                <div style={{ padding: "6px 8px" }}>
+                  {jobs.length === 0 ? (
+                    <p style={{ padding: "20px", textAlign: "center", fontSize: 12, color: "var(--text-3)" }}>No background jobs</p>
+                  ) : (
+                    <ul style={{ maxHeight: 280, overflowY: "auto" }}>
+                      {jobs.map((j) => (
+                        <li key={j.uploadId} className="dropdown-item" style={{ borderRadius: 9 }}>
+                          {j.status === "processing" ? (
+                            <svg className="spinner" width="16" height="16" fill="none" stroke="var(--primary)" strokeWidth="2" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9" />
+                            </svg>
+                          ) : j.status === "completed" ? (
+                            <span style={{ color: "var(--success)", fontWeight: 700 }}>✓</span>
+                          ) : j.status === "completed_with_errors" ? (
+                            <span style={{ color: "var(--warning)", fontWeight: 700 }}>⚠</span>
+                          ) : (
+                            <span style={{ color: "var(--error)", fontWeight: 700 }}>✕</span>
+                          )}
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <p style={{ fontSize: 13, fontWeight: 500, color: "var(--text-1)" }}>Job #{j.uploadId}</p>
+                            <p style={{ fontSize: 11, color: j.status === "processing" ? "var(--primary)" : j.status === "completed" ? "var(--success)" : j.status === "failed" ? "var(--error)" : "var(--warning)", textTransform: "capitalize" }}>
+                              {j.status.replace(/_/g, " ")}
+                            </p>
+                          </div>
+                          {j.status !== "processing" && (
+                            <Link href="/import" onClick={() => setShowBell(false)} style={{ fontSize: 12, color: "var(--primary)", fontWeight: 600 }}>View →</Link>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
               </div>
             </>
           )}
         </div>
 
         {/* Avatar */}
-        <div className="relative">
+        <div style={{ position: "relative" }}>
           <button
-            onClick={() => setShowDropdown(!showDropdown)}
-            className="w-9 h-9 rounded-lg bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center text-white text-sm font-bold hover:opacity-90 transition-opacity"
+            onClick={() => { setShowDropdown(!showDropdown); setShowBell(false); }}
+            className="avatar avatar-brand"
+            style={{ border: "none", cursor: "pointer", width: 36, height: 36, fontSize: 14 }}
           >
             {user?.full_name?.[0]?.toUpperCase() ?? "?"}
           </button>
 
           {showDropdown && (
             <>
-              <div className="fixed inset-0 z-40" onClick={() => setShowDropdown(false)} />
-              <div
-                className="absolute right-0 top-11 w-52 rounded-xl border border-white/[0.08] shadow-2xl z-50 overflow-hidden"
-                style={{ background: "#0F1225" }}
-              >
-                <div className="px-4 py-3 border-b border-white/[0.06]">
-                  <p className="text-white text-sm font-semibold">{user?.full_name ?? "User"}</p>
-                  <p className="text-slate-500 text-xs mt-0.5">{user?.email ?? ""}</p>
-                  <span className={`inline-block mt-1 px-2 py-0.5 rounded-full text-[10px] font-semibold border ${user?.role === "admin" ? "text-indigo-400 bg-indigo-400/10 border-indigo-400/20" : "text-sky-400 bg-sky-400/10 border-sky-400/20"}`}>
+              <div style={{ position: "fixed", inset: 0, zIndex: 40 }} onClick={() => setShowDropdown(false)} />
+              <div className="dropdown" style={{ position: "absolute", right: 0, top: 44, width: 210, zIndex: 50 }}>
+                <div className="dropdown-header">
+                  <div style={{ fontSize: 13, fontWeight: 700, color: "var(--text-1)" }}>{user?.full_name ?? "User"}</div>
+                  <div style={{ fontSize: 11, color: "var(--text-3)", marginTop: 2 }}>{user?.email ?? ""}</div>
+                  <span
+                    className={user?.role === "admin" ? "badge badge-primary" : "badge badge-neutral"}
+                    style={{ marginTop: 6, fontSize: 10 }}
+                  >
                     {user?.role ?? ""}
                   </span>
                 </div>
-                <div className="p-1.5">
-                  {[
-                    { label: "Settings", icon: "⚙" },
-                    { label: "Documentation", icon: "📄" },
-                  ].map(({ label, icon }) => (
-                    <button
-                      key={label}
-                      className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm text-slate-400 hover:text-white hover:bg-white/[0.06] transition-colors text-left"
-                      onClick={() => setShowDropdown(false)}
-                    >
-                      <span className="text-base">{icon}</span> {label}
-                    </button>
-                  ))}
-                  <div className="border-t border-white/[0.06] mt-1 pt-1">
-                    <button
-                      onClick={logout}
-                      className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm text-red-400 hover:text-red-300 hover:bg-red-500/10 transition-colors text-left"
-                    >
-                      <span className="text-base">→</span> Sign out
+                <div style={{ padding: "6px 8px" }}>
+                  <Link
+                    href="/settings"
+                    className="dropdown-item"
+                    style={{ borderRadius: 8, display: "flex", alignItems: "center", gap: 8 }}
+                    onClick={() => setShowDropdown(false)}
+                  >
+                    <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                      <circle cx="12" cy="12" r="3" />
+                    </svg>
+                    Settings
+                  </Link>
+                  <div style={{ borderTop: "1px solid var(--border)", marginTop: 4, paddingTop: 4 }}>
+                    <button className="dropdown-item dropdown-item-danger" style={{ borderRadius: 8 }} onClick={logout}>
+                      Sign out
                     </button>
                   </div>
                 </div>

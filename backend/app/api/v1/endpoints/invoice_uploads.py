@@ -3,7 +3,7 @@ import json
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile, File
 from sqlalchemy.orm import Session, selectinload
 
-from app.api.deps import get_qbo_client, require_admin, get_db
+from app.api.deps import get_current_user, get_qbo_client, get_db
 from app.models.customer import Customer
 from app.models.generated_invoice import GeneratedInvoice
 from app.models.invoice_upload import InvoiceUpload
@@ -36,7 +36,7 @@ _MAX_BYTES = 10 * 1024 * 1024  # 10 MB
 def upload_and_generate(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
-    user: User = Depends(require_admin),
+    user: User = Depends(get_current_user),
     qbo: SupportsQuickBooks = Depends(get_qbo_client),
 ):
     filename = file.filename or "upload"
@@ -105,7 +105,7 @@ def upload_and_generate(
 @router.get("/invoice-uploads")
 def list_uploads(
     db: Session = Depends(get_db),
-    user: User = Depends(require_admin),
+    user: User = Depends(get_current_user),
 ):
     rows = (
         db.query(InvoiceUpload)
@@ -137,7 +137,7 @@ def list_uploads(
 def get_upload_detail(
     upload_id: int,
     db: Session = Depends(get_db),
-    user: User = Depends(require_admin),
+    user: User = Depends(get_current_user),
 ):
     record = db.query(InvoiceUpload).filter(InvoiceUpload.id == upload_id).first()
     if not record:
@@ -209,13 +209,13 @@ def get_upload_detail(
 def validate_upload(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
-    user: User = Depends(require_admin),
+    user: User = Depends(get_current_user),
 ):
     filename = file.filename or "upload"
     if not any(filename.lower().endswith(ext) for ext in (".csv", ".xlsx", ".xls")):
         raise HTTPException(status_code=422, detail="Unsupported file type.")
-    content = file.file.read(10 * 1024 * 1024 + 1)
-    if len(content) > 10 * 1024 * 1024:
+    content = file.file.read(_MAX_BYTES + 1)
+    if len(content) > _MAX_BYTES:
         raise HTTPException(status_code=413, detail="File too large (max 10 MB).")
     try:
         return validate_file(filename, content, db)
@@ -227,7 +227,7 @@ def validate_upload(
 def revalidate_upload(
     body: RevalidateRequest,
     db: Session = Depends(get_db),
-    user: User = Depends(require_admin),
+    user: User = Depends(get_current_user),
 ):
     return revalidate(body, db)
 
@@ -236,19 +236,33 @@ def revalidate_upload(
 def preview_upload(
     body: RevalidateRequest,
     db: Session = Depends(get_db),
-    user: User = Depends(require_admin),
+    user: User = Depends(get_current_user),
 ):
     return build_preview(body, db)
 
 
-def _run_generation_bg(upload_id: int, body_dict: dict, access_token: str, realm_id: str) -> None:
-    """Run invoice generation in a background thread with its own DB session."""
+def _run_generation_bg(upload_id: int, body_dict: dict) -> None:
+    """Run invoice generation in a background thread with its own DB session.
+
+    Tokens are fetched inside the task (not passed from the request) so that any
+    auto-refresh that happened between enqueue time and actual execution is used.
+    """
     from app.db.session import SessionLocal
     from app.services.qbo_client import QuickBooksClient
     from app.schemas.invoice_validation import ValidatedRow as VRow
 
     db = SessionLocal()
     try:
+        tokens = get_valid_tokens_sync()
+        if not tokens:
+            record = db.query(InvoiceUpload).filter(InvoiceUpload.id == upload_id).first()
+            if record:
+                record.status = "failed"
+                record.errors_json = json.dumps(["QuickBooks is not connected"])
+                db.add(record)
+                db.commit()
+            return
+
         qbo = QuickBooksClient()
         rows = [VRow(**r) for r in body_dict["rows"]]
         parsed = _rows_to_parsed_file(rows, body_dict["metric_columns"])
@@ -256,8 +270,8 @@ def _run_generation_bg(upload_id: int, body_dict: dict, access_token: str, realm
         result = generate_invoices_from_parsed(
             db=db,
             qbo=qbo,
-            access_token=access_token,
-            realm_id=realm_id,
+            access_token=tokens.access_token,
+            realm_id=tokens.realm_id,
             parsed=parsed,
             invoice_upload_id=upload_id,
         )
@@ -294,7 +308,7 @@ def generate_from_validated(
     body: GenerateRequest,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
-    user: User = Depends(require_admin),
+    user: User = Depends(get_current_user),
 ):
     tokens = get_valid_tokens_sync()
     if not tokens:
@@ -316,8 +330,6 @@ def generate_from_validated(
         _run_generation_bg,
         record.id,
         body.model_dump(),
-        tokens.access_token,
-        tokens.realm_id,
     )
 
     return {"upload_id": record.id, "status": "processing"}

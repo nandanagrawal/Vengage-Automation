@@ -45,8 +45,8 @@ class CustomerCreate(BaseModel):
 
     primary_email: EmailStr | None = None
     phone_number: str | None = None
-    cc_email: str | None = None
-    bcc_email: str | None = None
+    cc_email: EmailStr | None = None
+    bcc_email: EmailStr | None = None
     mobile: str | None = None
     fax: str | None = None
     other_contact: str | None = None
@@ -76,8 +76,8 @@ class CustomerUpdate(BaseModel):
 
     primary_email: EmailStr | None = None
     phone_number: str | None = None
-    cc_email: str | None = None
-    bcc_email: str | None = None
+    cc_email: EmailStr | None = None
+    bcc_email: EmailStr | None = None
     mobile: str | None = None
     fax: str | None = None
     other_contact: str | None = None
@@ -182,10 +182,3 @@ def customer_response_from_row(row: Customer) -> CustomerResponse:
             "customer_type_ids": [ct.id for ct in row.customer_types],
         },
     )
-
-
-class InvoiceActivityItem(BaseModel):
-    customer_display_name: str
-    invoice_number: str
-    email_status: str
-    txn_date: str | None = None

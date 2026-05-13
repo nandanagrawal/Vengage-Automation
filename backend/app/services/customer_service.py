@@ -85,29 +85,32 @@ def _apply_customer_type_links(db: Session, row: Customer, ids: list[int] | None
 def _apply_address_to_billing(row: Customer, addr: object | None) -> None:
     if addr is None:
         return
+    # exclude_none=True means only fields explicitly present in the payload appear in d.
+    # Only overwrite DB columns for keys that are actually in the payload — this preserves
+    # line3/line4 values synced from QBO when the UI only submits line1/line2.
     d = addr.model_dump(exclude_none=True)
-    row.billing_line1 = d.get("line1")
-    row.billing_line2 = d.get("line2")
-    row.billing_line3 = d.get("line3")
-    row.billing_line4 = d.get("line4")
-    row.billing_city = d.get("city")
-    row.billing_state = d.get("state")
-    row.billing_zip = d.get("zip")
-    row.billing_country = d.get("country")
+    if "line1" in d: row.billing_line1 = d["line1"]
+    if "line2" in d: row.billing_line2 = d["line2"]
+    if "line3" in d: row.billing_line3 = d["line3"]
+    if "line4" in d: row.billing_line4 = d["line4"]
+    if "city" in d: row.billing_city = d["city"]
+    if "state" in d: row.billing_state = d["state"]
+    if "zip" in d: row.billing_zip = d["zip"]
+    if "country" in d: row.billing_country = d["country"]
 
 
 def _apply_address_to_shipping(row: Customer, addr: object | None) -> None:
     if addr is None:
         return
     d = addr.model_dump(exclude_none=True)
-    row.shipping_line1 = d.get("line1")
-    row.shipping_line2 = d.get("line2")
-    row.shipping_line3 = d.get("line3")
-    row.shipping_line4 = d.get("line4")
-    row.shipping_city = d.get("city")
-    row.shipping_state = d.get("state")
-    row.shipping_zip = d.get("zip")
-    row.shipping_country = d.get("country")
+    if "line1" in d: row.shipping_line1 = d["line1"]
+    if "line2" in d: row.shipping_line2 = d["line2"]
+    if "line3" in d: row.shipping_line3 = d["line3"]
+    if "line4" in d: row.shipping_line4 = d["line4"]
+    if "city" in d: row.shipping_city = d["city"]
+    if "state" in d: row.shipping_state = d["state"]
+    if "zip" in d: row.shipping_zip = d["zip"]
+    if "country" in d: row.shipping_country = d["country"]
 
 
 def create_customer_row(

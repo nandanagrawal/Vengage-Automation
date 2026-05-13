@@ -10,13 +10,7 @@ export type ToastItem = {
   type: ToastType;
 };
 
-function SingleToast({
-  item,
-  onDismiss,
-}: {
-  item: ToastItem;
-  onDismiss: (id: string) => void;
-}) {
+function SingleToast({ item, onDismiss }: { item: ToastItem; onDismiss: (id: string) => void }) {
   const [progress, setProgress] = useState(100);
   const [exiting, setExiting] = useState(false);
   const startRef = useRef(Date.now());
@@ -46,48 +40,44 @@ function SingleToast({
   const dismiss = () => setExiting(true);
 
   const colors = {
-    error: {
-      border: "border-rose-500/30",
-      bg: "bg-[#1c0e10]",
-      bar: "bg-rose-500",
-      icon: "text-rose-400",
-    },
-    success: {
-      border: "border-emerald-500/30",
-      bg: "bg-[#0c1a10]",
-      bar: "bg-emerald-500",
-      icon: "text-emerald-400",
-    },
-    info: {
-      border: "border-indigo-500/30",
-      bg: "bg-[#0e1020]",
-      bar: "bg-indigo-500",
-      icon: "text-indigo-400",
-    },
+    error:   { border: "var(--error-border)",   bg: "var(--error-bg)",   bar: "var(--error)",   icon: "var(--error)",   text: "var(--error-text)"   },
+    success: { border: "var(--success-border)", bg: "var(--success-bg)", bar: "var(--success)", icon: "var(--success)", text: "var(--success-text)" },
+    info:    { border: "var(--primary-border)", bg: "var(--primary-bg)", bar: "var(--primary)", icon: "var(--primary)", text: "var(--primary-text)" },
   }[item.type];
 
   return (
     <div
-      className={`
-        relative flex items-start gap-3 px-4 pt-3 pb-4 rounded-xl border shadow-2xl w-80 max-w-[calc(100vw-2rem)] overflow-hidden
-        ${colors.border} ${colors.bg}
-        transition-all duration-300 ease-out
-        ${exiting ? "opacity-0 translate-x-6 scale-95" : "opacity-100 translate-x-0 scale-100"}
-      `}
+      style={{
+        position: "relative",
+        display: "flex",
+        alignItems: "flex-start",
+        gap: 10,
+        padding: "12px 14px 16px",
+        borderRadius: 10,
+        border: `1px solid ${colors.border}`,
+        background: colors.bg,
+        boxShadow: "0 4px 16px rgba(0,0,0,0.1)",
+        width: 320,
+        maxWidth: "calc(100vw - 2rem)",
+        overflow: "hidden",
+        transition: "opacity 0.3s, transform 0.3s",
+        opacity: exiting ? 0 : 1,
+        transform: exiting ? "translateX(8px) scale(0.97)" : "translateX(0) scale(1)",
+      }}
     >
       {/* Icon */}
-      <span className={`mt-0.5 shrink-0 ${colors.icon}`}>
+      <span style={{ color: colors.icon, flexShrink: 0, marginTop: 1 }}>
         {item.type === "success" ? (
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2.5} viewBox="0 0 24 24">
+          <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth={2.5} viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
           </svg>
         ) : item.type === "error" ? (
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+          <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
             <circle cx="12" cy="12" r="10" />
             <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4m0 4h.01" />
           </svg>
         ) : (
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+          <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
             <circle cx="12" cy="12" r="10" />
             <path strokeLinecap="round" strokeLinejoin="round" d="M12 16v-4m0-4h.01" />
           </svg>
@@ -95,41 +85,34 @@ function SingleToast({
       </span>
 
       {/* Message */}
-      <p className="flex-1 text-sm text-white leading-snug">{item.message}</p>
+      <p style={{ flex: 1, fontSize: 13, color: colors.text, lineHeight: 1.45 }}>{item.message}</p>
 
       {/* Close */}
       <button
         type="button"
         onClick={dismiss}
-        className="shrink-0 mt-0.5 text-slate-500 hover:text-white transition-colors"
         aria-label="Dismiss"
+        style={{ flexShrink: 0, marginTop: 1, color: colors.icon, background: "none", border: "none", cursor: "pointer", opacity: 0.7 }}
       >
-        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2.5} viewBox="0 0 24 24">
+        <svg width="13" height="13" fill="none" stroke="currentColor" strokeWidth={2.5} viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
         </svg>
       </button>
 
       {/* Progress bar */}
       <div
-        className={`absolute bottom-0 left-0 h-0.5 ${colors.bar} transition-none`}
-        style={{ width: `${progress}%` }}
+        style={{ position: "absolute", bottom: 0, left: 0, height: 3, background: colors.bar, width: `${progress}%`, borderRadius: "0 0 10px 10px" }}
       />
     </div>
   );
 }
 
-export function ToastContainer({
-  toasts,
-  onDismiss,
-}: {
-  toasts: ToastItem[];
-  onDismiss: (id: string) => void;
-}) {
+export function ToastContainer({ toasts, onDismiss }: { toasts: ToastItem[]; onDismiss: (id: string) => void }) {
   if (toasts.length === 0) return null;
   return (
-    <div className="fixed top-20 right-4 z-[200] flex flex-col gap-2 pointer-events-none">
+    <div style={{ position: "fixed", top: 72, right: 16, zIndex: 200, display: "flex", flexDirection: "column", gap: 8, pointerEvents: "none" }}>
       {toasts.map((t) => (
-        <div key={t.id} className="pointer-events-auto">
+        <div key={t.id} style={{ pointerEvents: "auto" }}>
           <SingleToast item={t} onDismiss={onDismiss} />
         </div>
       ))}

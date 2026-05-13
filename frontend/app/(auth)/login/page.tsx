@@ -1,7 +1,6 @@
 "use client";
 
 import { FormEvent, useState } from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { loginRequest, saveToken } from "@/lib/auth";
 
@@ -27,78 +26,77 @@ export default function LoginPage() {
     }
   };
 
-  const field = "w-full rounded-xl bg-white/[0.04] border border-white/[0.08] px-4 py-3 text-sm text-white placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-indigo-500/40 transition";
-
   return (
-    <div className="w-full max-w-md animate-fadeInUp">
+    <div className="login-card anim-fade-up">
       {/* Logo */}
-      <div className="flex flex-col items-center mb-10">
-        <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center mb-4 animate-float">
-          <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" strokeWidth={2.5} viewBox="0 0 24 24">
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", marginBottom: 32 }}>
+        <div className="logo-mark" style={{ width: 52, height: 52, borderRadius: 16, marginBottom: 14 }}>
+          <svg width="24" height="24" fill="none" stroke="white" strokeWidth="2.5" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
           </svg>
         </div>
-        <h1 className="text-2xl font-extrabold text-white tracking-tight">Vengage</h1>
-        <p className="text-slate-500 text-sm mt-1">Sign in to your account</p>
+        <div style={{ fontSize: 26, fontWeight: 800, color: "var(--text-1)", letterSpacing: "-0.5px" }}>Vengage</div>
+        <div style={{ fontSize: 14, color: "var(--text-3)", marginTop: 4 }}>Sign in to your workspace</div>
       </div>
 
-      <div className="rounded-2xl border border-white/[0.08] p-8" style={{ background: "var(--bg-card)" }}>
-        <form onSubmit={handleSubmit} className="space-y-5">
-          <div>
-            <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1.5">
-              Email address
-            </label>
-            <input
-              type="email"
-              required
-              autoComplete="email"
-              className={field}
-              placeholder="you@company.com"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-            />
+      <div className="card" style={{ padding: "28px 32px" }}>
+        <form onSubmit={handleSubmit}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+            <div>
+              <label className="input-label">Email address</label>
+              <input
+                className="input"
+                type="email"
+                required
+                autoComplete="email"
+                placeholder="you@company.com"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+              />
+            </div>
+
+            <div>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                <label className="input-label" style={{ marginBottom: 0 }}>Password</label>
+              </div>
+              <input
+                className="input"
+                type="password"
+                required
+                autoComplete="current-password"
+                placeholder="••••••••"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+              />
+            </div>
+
+            {error && (
+              <div className="notice-banner notice-error" style={{ marginBottom: 0 }}>
+                <span style={{ fontSize: 13 }}>{error}</span>
+              </div>
+            )}
+
+            <button
+              type="submit"
+              className="btn btn-primary btn-lg"
+              style={{ width: "100%", justifyContent: "center", marginTop: 4 }}
+              disabled={loading}
+            >
+              {loading ? (
+                <>
+                  <svg className="spinner" width="16" height="16" fill="none" stroke="white" strokeWidth="2" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9" />
+                  </svg>
+                  Signing in…
+                </>
+              ) : "Sign in"}
+            </button>
           </div>
-
-          <div>
-            <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1.5">
-              Password
-            </label>
-            <input
-              type="password"
-              required
-              autoComplete="current-password"
-              className={field}
-              placeholder="••••••••"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-            />
-          </div>
-
-          {error && (
-            <p className="text-rose-400 text-sm rounded-lg border border-rose-400/20 bg-rose-400/10 px-3 py-2">
-              {error}
-            </p>
-          )}
-
-          <button
-            type="submit"
-            disabled={loading}
-            className="w-full shimmer-btn py-3 rounded-xl text-white text-sm font-semibold hover:scale-[1.01] active:scale-[0.99] transition-transform disabled:opacity-60 disabled:cursor-not-allowed"
-          >
-            {loading ? "Signing in…" : "Sign in"}
-          </button>
         </form>
       </div>
 
-      <p className="text-center text-slate-600 text-xs mt-6">
-        New account?{" "}
-        <span className="text-slate-400">Ask your admin to create one via the API</span>
-      </p>
-
-      <p className="text-center mt-4">
-        <Link href="/" className="text-slate-600 text-xs hover:text-slate-400 transition-colors">
-          ← Back to home
-        </Link>
+      <p style={{ textAlign: "center", fontSize: 12, color: "var(--text-3)", marginTop: 20 }}>
+        New account? <span style={{ color: "var(--text-2)", fontWeight: 500 }}>Ask your admin to create one via the API</span>
       </p>
     </div>
   );

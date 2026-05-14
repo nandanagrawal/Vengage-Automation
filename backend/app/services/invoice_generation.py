@@ -64,6 +64,7 @@ from app.models.generated_invoice import (
 )
 from app.models.invoice import Invoice
 from app.models.product_and_service import ProductAndService
+from app.core.config import settings
 from app.services.qbo_client import SupportsQuickBooks
 
 
@@ -459,6 +460,8 @@ def _build_qbo_invoice_payload(
         "GlobalTaxCalculation": "TaxExcluded",
         "Line": [li.qbo_payload for li in all_line_items],
     }
+    if settings.QBO_INVOICE_TEMPLATE_ID:
+        payload["CustomForm"] = {"value": settings.QBO_INVOICE_TEMPLATE_ID}
     return payload, total, all_line_items
 
 

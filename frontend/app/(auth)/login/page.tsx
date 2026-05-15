@@ -30,10 +30,8 @@ export default function LoginPage() {
     <div className="login-card anim-fade-up">
       {/* Logo */}
       <div style={{ display: "flex", flexDirection: "column", alignItems: "center", marginBottom: 32 }}>
-        <div className="logo-mark" style={{ width: 52, height: 52, borderRadius: 16, marginBottom: 14 }}>
-          <svg width="24" height="24" fill="none" stroke="white" strokeWidth="2.5" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
-          </svg>
+        <div style={{ width: 52, height: 52, borderRadius: 16, marginBottom: 14, overflow: "hidden" }}>
+          <img src="https://vengage.ai/frontend_assets/images/vlogo.png" alt="Vengage" style={{ width: "100%", height: "100%", objectFit: "contain" }} />
         </div>
         <div style={{ fontSize: 26, fontWeight: 800, color: "var(--text-1)", letterSpacing: "-0.5px" }}>Vengage</div>
         <div style={{ fontSize: 14, color: "var(--text-3)", marginTop: 4 }}>Sign in to your workspace</div>

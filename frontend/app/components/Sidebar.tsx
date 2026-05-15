@@ -65,22 +65,14 @@ export default function Sidebar() {
       >
         {!collapsed && (
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <div className="logo-mark">
-              <svg width="16" height="16" fill="none" stroke="white" strokeWidth="2.5" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
-              </svg>
-            </div>
+            <img src="https://vengage.ai/frontend_assets/images/vlogo.png" alt="Vengage" style={{ width: 32, height: 32, objectFit: "contain", borderRadius: 8 }} />
             <span style={{ fontWeight: 800, fontSize: 16, color: "var(--text-1)", letterSpacing: "-0.3px" }}>
               Vengage
             </span>
           </div>
         )}
         {collapsed && (
-          <div className="logo-mark">
-            <svg width="16" height="16" fill="none" stroke="white" strokeWidth="2.5" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
-            </svg>
-          </div>
+          <img src="https://vengage.ai/frontend_assets/images/vlogo.png" alt="Vengage" style={{ width: 32, height: 32, objectFit: "contain", borderRadius: 8 }} />
         )}
         {!collapsed && (
           <button className="icon-btn" onClick={() => setCollapsed(true)} aria-label="Collapse sidebar">

@@ -1,24 +1,47 @@
-"""QuickBooks OAuth — Intuit App Center (sandbox or production company same URLs)."""
+"""QuickBooks OAuth - Intuit App Center (sandbox or production company same URLs)."""
 
 from __future__ import annotations
 
 import logging
 import base64
+import secrets
 import time
 from urllib.parse import urlencode
 
 import httpx
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import RedirectResponse
+from sqlalchemy.orm import Session
 
+from app.api.deps import get_current_user, get_db
 from app.core.config import settings
-from app.services.qbo_tokens import Tokens, clear_tokens, load_tokens, save_tokens, token_file_path
+from app.models.user import User
+from app.services.qbo_tokens import Tokens, clear_tokens, load_tokens, save_tokens
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
 AUTH_URL = "https://appcenter.intuit.com/connect/oauth2"
 TOKEN_URL = "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer"
+
+# In-memory state store: {state_token: expiry_epoch_seconds}
+# Single-instance only — sufficient for this app; replace with Redis for multi-instance.
+_pending_states: dict[str, float] = {}
+_STATE_TTL = 300  # 5 minutes
+
+
+def _store_state(state: str) -> None:
+    _pending_states[state] = time.time() + _STATE_TTL
+    # Purge expired entries to prevent unbounded growth
+    expired = [k for k, exp in _pending_states.items() if time.time() > exp]
+    for k in expired:
+        del _pending_states[k]
+
+
+def _consume_state(state: str) -> bool:
+    """Return True and remove the state if it is valid and unexpired."""
+    exp = _pending_states.pop(state, None)
+    return exp is not None and time.time() <= exp
 
 
 @router.get("/connect")
@@ -28,18 +51,23 @@ def qbo_connect() -> RedirectResponse:
             status_code=503,
             detail="OAuth not configured: set QBO_CLIENT_ID and QBO_REDIRECT_URI in .env",
         )
+    state = secrets.token_urlsafe(32)
+    _store_state(state)
     params = {
         "client_id": settings.QBO_CLIENT_ID,
         "redirect_uri": settings.QBO_REDIRECT_URI,
         "response_type": "code",
         "scope": "com.intuit.quickbooks.accounting",
-        "state": "vengage",
+        "state": state,
     }
     return RedirectResponse(url=f"{AUTH_URL}?{urlencode(params)}")
 
 
 @router.get("/callback")
 async def qbo_callback(code: str, realmId: str = "", state: str = "") -> RedirectResponse:
+    if not state or not _consume_state(state):
+        raise HTTPException(status_code=400, detail="OAuth state mismatch - possible CSRF attack.")
+
     client_id = settings.QBO_CLIENT_ID or ""
     client_secret = settings.QBO_CLIENT_SECRET or ""
     redirect_uri = settings.QBO_REDIRECT_URI or ""
@@ -75,38 +103,47 @@ async def qbo_callback(code: str, realmId: str = "", state: str = "") -> Redirec
             realm_id=realm_id,
         )
     )
-    dest = token_file_path()
-    logger.info("QuickBooks OAuth tokens saved to %s", dest)
+    logger.info("QuickBooks OAuth tokens saved (encrypted)")
     base = settings.FRONTEND_URL.rstrip("/")
     return RedirectResponse(url=f"{base}/dashboard?connected=true")
 
 
 @router.get("/status")
-def qbo_status() -> dict:
+def qbo_status(
+    _user: User = Depends(get_current_user),
+    _db: Session = Depends(get_db),
+) -> dict:
     tokens = load_tokens()
     return {
         "connected": tokens is not None,
         "realmId": tokens.realm_id if tokens else None,
         "tokenExpiry": tokens.access_token_expiry if tokens else None,
         "environment": settings.QBO_ENVIRONMENT,
-        "token_file_path": str(token_file_path()),
     }
 
 
 @router.delete("/disconnect")
-def qbo_disconnect() -> dict:
+def qbo_disconnect(
+    _user: User = Depends(get_current_user),
+    _db: Session = Depends(get_db),
+) -> dict:
     clear_tokens()
     return {"disconnected": True}
 
 
 @router.get("/oauth-check")
-def oauth_check() -> dict:
-    """Non-secret view of what /connect sends — compare redirect_uri to Intuit Developer app (exact match)."""
+def oauth_check(
+    _user: User = Depends(get_current_user),
+    _db: Session = Depends(get_db),
+) -> dict:
+    """Diagnostic view of OAuth config - compare redirect_uri to Intuit Developer app (exact match)."""
     cid = settings.QBO_CLIENT_ID or ""
     redir = settings.QBO_REDIRECT_URI or ""
-    dest = token_file_path()
     return {
-        "authorization_url_template": f"{AUTH_URL}?client_id=…&redirect_uri=…&response_type=code&scope=com.intuit.quickbooks.accounting&state=vengage",
+        "authorization_url_template": (
+            f"{AUTH_URL}?client_id=...&redirect_uri=...&response_type=code"
+            "&scope=com.intuit.quickbooks.accounting&state=<random>"
+        ),
         "client_id": cid,
         "client_id_length": len(cid),
         "redirect_uri": redir,
@@ -114,12 +151,9 @@ def oauth_check() -> dict:
         "redirect_uri_has_trailing_slash": redir.endswith("/") if redir else False,
         "client_secret_configured": bool(settings.QBO_CLIENT_SECRET),
         "qbo_environment": settings.QBO_ENVIRONMENT,
-        "token_file_path": str(dest),
-        "token_file_note": "tokens.json is created only after Intuit redirects successfully to /api/auth/callback (OAuth completes).",
         "hints": [
-            "Intuit → Your app → Keys & OAuth → Redirect URIs: add EXACTLY the redirect_uri value above (localhost vs 127.0.0.1 are different).",
-            "For QuickBooks Sandbox companies, use the Development / Sandbox Client ID and Client Secret from that same Keys page — not Production.",
-            "After changing Redirect URIs in Intuit, wait a minute and hard-refresh; open Intuit's “View error details” on the error page for codes like redirect_uri_mismatch.",
-            "Default token path matches vengage-poc: repo-root tokens.json (or TOKEN_FILE_PATH).",
+            "Intuit -> Your app -> Keys & OAuth -> Redirect URIs: add EXACTLY the redirect_uri value above (localhost vs 127.0.0.1 are different).",
+            "For QuickBooks Sandbox companies, use the Development / Sandbox Client ID and Client Secret from that same Keys page - not Production.",
+            "After changing Redirect URIs in Intuit, wait a minute and hard-refresh; open Intuit's 'View error details' on the error page for codes like redirect_uri_mismatch.",
         ],
     }

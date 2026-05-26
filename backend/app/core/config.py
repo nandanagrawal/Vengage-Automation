@@ -1,5 +1,9 @@
+import warnings
+
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_INSECURE_JWT_DEFAULT = "change-me-in-production-use-a-long-random-string"
 
 
 class Settings(BaseSettings):
@@ -31,6 +35,19 @@ class Settings(BaseSettings):
             return None
         return v.rstrip("/") or None
 
+    @field_validator("JWT_SECRET", mode="after")
+    @classmethod
+    def validate_jwt_secret(cls, v: str) -> str:
+        if len(v) < 32:
+            raise ValueError("JWT_SECRET must be at least 32 characters long.")
+        if v == _INSECURE_JWT_DEFAULT:
+            warnings.warn(
+                "JWT_SECRET is using the insecure default value. "
+                "Set a strong random secret (openssl rand -hex 32) in your .env file.",
+                stacklevel=2,
+            )
+        return v
+
     APP_NAME: str = "Vengage API"
     API_V1_STR: str = "/api/v1"
     DEBUG: bool = False
@@ -56,10 +73,17 @@ class Settings(BaseSettings):
     FRONTEND_URL: str = "http://localhost:3000"
     TOKEN_FILE_PATH: str | None = None
 
+    # Optional explicit Fernet key for token encryption.
+    # If not set, a stable key is derived from JWT_SECRET via HKDF-SHA256.
+    QBO_TOKEN_ENCRYPTION_KEY: str | None = None
+
+    # Set True in production (HTTPS) so OAuth state cookie is Secure.
+    SECURE_COOKIES: bool = False
+
     INTUIT_WEBHOOK_VERIFIER_TOKEN: str | None = None
 
     # Auth
-    JWT_SECRET: str = "change-me-in-production-use-a-long-random-string"
+    JWT_SECRET: str = _INSECURE_JWT_DEFAULT
     JWT_EXPIRE_MINUTES: int = 60 * 24 * 7  # 7 days
 
 

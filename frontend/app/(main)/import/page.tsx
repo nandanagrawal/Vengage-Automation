@@ -1,9 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import * as XLSX from "xlsx";
 import {
   apiGenerateInvoices,
   apiGet,
+  apiGetLineItemPreview,
+  apiGetSheetConfig,
   apiPreview,
   apiRevalidate,
   apiValidateInvoiceFile,
@@ -306,6 +309,121 @@ function PreviewStage({
   // row lookup by center_id lower
   const rowByCenterId = Object.fromEntries(rows.map(r => [r.center_id.toLowerCase(), r]));
 
+  const downloadSheet = async () => {
+    // ── Auto-fit helper ───────────────────────────────────────────────────────
+    const autoColWidths = (data: (string | number | null)[][]): { wch: number }[] => {
+      const widths: number[] = [];
+      data.forEach(row => row.forEach((cell, ci) => {
+        widths[ci] = Math.max(widths[ci] ?? 0, cell != null ? String(cell).length : 0);
+      }));
+      return widths.map(w => ({ wch: Math.min(w + 2, 60) }));
+    };
+
+    // ── Fetch sheet config (service codes, last invoice no) ───────────────────
+    let serviceCodeProducts: { name: string; code: string }[] = [];
+    try {
+      const cfg = await apiGetSheetConfig();
+      serviceCodeProducts = cfg.service_code_products;
+    } catch { /* non-fatal */ }
+
+    // ── Fetch line-item dry-run data ─────────────────────────────────────────
+    let liPreview: Awaited<ReturnType<typeof apiGetLineItemPreview>> | null = null;
+    try {
+      liPreview = await apiGetLineItemPreview(cols, rows);
+    } catch { /* non-fatal */ }
+
+    // ── Date values (from backend dry-run, or calculated client-side) ─────────
+    const MONTHS = ["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"];
+    const today = new Date();
+    // Invoice month = previous calendar month (invoices are for the period just ended)
+    const invoiceMonth = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+    const prevOfInvoiceMonth = new Date(today.getFullYear(), today.getMonth() - 2, 1);
+    const lastDayInvoiceMonth = new Date(today.getFullYear(), today.getMonth(), 0);
+    const fmt2 = (n: number) => String(n).padStart(2, "0");
+    const fallbackInvDate = `${fmt2(lastDayInvoiceMonth.getDate())}/${fmt2(lastDayInvoiceMonth.getMonth() + 1)}/${lastDayInvoiceMonth.getFullYear()}`;
+    const fallbackDueDate = (() => { const d = new Date(lastDayInvoiceMonth); d.setDate(d.getDate() + 15); return `${fmt2(d.getDate())}/${fmt2(d.getMonth() + 1)}/${d.getFullYear()}`; })();
+    const memoLabel      = `${MONTHS[invoiceMonth.getMonth()]}${String(invoiceMonth.getFullYear()).slice(2)} Invoice`;
+    const prevMonthLabel = `${MONTHS[prevOfInvoiceMonth.getMonth()]}${String(prevOfInvoiceMonth.getFullYear()).slice(2)}`;
+    const invoiceDate = liPreview?.invoice_date ?? fallbackInvDate;
+    const dueDate     = liPreview?.due_date     ?? fallbackDueDate;
+    const memo        = liPreview?.memo         ?? memoLabel;
+    const lastInvNo   = liPreview?.last_invoice_no ?? "";
+
+    // ── Sheet 1: RAW Data-Imaging (same format as uploaded file) ─────────────
+    const s1FixedHeaders = ["S.No. (1)", "Center Name (2)", "Center Prefix (3)"];
+    const s1Headers = [...s1FixedHeaders, ...cols];
+    const s1Aoa: (string | number)[][] = [s1Headers];
+    rows.forEach(r => {
+      const dataRow: (string | number)[] = [r.center_id, r.center_name, r.center_prefix];
+      cols.forEach(c => dataRow.push(r.metrics[c] ?? 0));
+      s1Aoa.push(dataRow);
+    });
+    const ws1 = XLSX.utils.aoa_to_sheet(s1Aoa);
+    ws1["!cols"] = autoColWidths(s1Aoa);
+
+    // ── Sheet 2: Invoice Data (QBO import format) ─────────────────────────────
+    const s2: (string | number | null)[][] = [];
+
+    // Metadata block (rows 1–N)
+    s2.push(["System Last Invoice No", lastInvNo]);
+    s2.push(["Invoice Date", invoiceDate]);
+    s2.push(["Memo", memo]);
+    s2.push(["Month", memo]);
+    serviceCodeProducts.forEach(p => s2.push([p.name, p.code]));
+    s2.push(["Previous Month", prevMonthLabel]);
+    s2.push([]); // blank row
+
+    // QBO column headers
+    const qboCols = [
+      "*InvoiceNo", "*Customer", "*InvoiceDate", "*DueDate", "Terms",
+      "ServiceDate", "Memo", "*Item(Product/Service)", "ItemDescription",
+      "ItemQuantity", "ItemRate", "*ItemAmount", "Item Tax Amount", "*Item Tax Code",
+    ];
+    s2.push(qboCols);
+
+    // Invoice line-item rows
+    (liPreview?.invoices ?? []).forEach(inv => {
+      inv.line_items.forEach((li, idx) => {
+        if (idx === 0) {
+          // First line item: full row with customer, dates, terms, memo
+          s2.push([
+            inv.invoice_no, inv.customer_display_name,
+            invoiceDate, dueDate, "Net 15",
+            invoiceDate, memo,
+            li.product_name, li.description,
+            li.quantity, li.rate, li.amount, li.tax_amount, li.tax_code,
+          ]);
+        } else {
+          // Continuation rows — same 14-column layout, empty cells for header-only columns
+          s2.push([
+            inv.invoice_no,  // A: *InvoiceNo
+            null,            // B: *Customer
+            null,            // C: *InvoiceDate
+            null,            // D: *DueDate
+            null,            // E: Terms
+            invoiceDate,     // F: ServiceDate
+            null,            // G: Memo
+            li.product_name, // H: *Item(Product/Service)
+            li.description,  // I: ItemDescription
+            li.quantity,     // J: ItemQuantity
+            li.rate,         // K: ItemRate
+            li.amount,       // L: *ItemAmount
+            li.tax_amount,   // M: Item Tax Amount
+            li.tax_code,     // N: *Item Tax Code
+          ]);
+        }
+      });
+    });
+
+    const ws2 = XLSX.utils.aoa_to_sheet(s2);
+    ws2["!cols"] = autoColWidths(s2);
+
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws1, "RAW Data-Imaging");
+    XLSX.utils.book_append_sheet(wb, ws2, "Invoice Data");
+    XLSX.writeFile(wb, "invoice-preview.xlsx");
+  };
+
   return (
     <div className="space-y-5">
       {/* Confirmation modal */}
@@ -329,6 +447,10 @@ function PreviewStage({
         </div>
         <div className="flex gap-2">
           <button type="button" onClick={onBack} className="px-4 py-2 rounded-xl text-gray-500 hover:text-gray-900 text-sm border border-gray-200 transition-colors">Back</button>
+          <button type="button" onClick={() => void downloadSheet()} className="px-4 py-2 rounded-xl text-gray-600 hover:text-gray-900 text-sm border border-gray-200 transition-colors flex items-center gap-1.5">
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={1.8} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 10l5 5m0 0l5-5m-5 5V3" /></svg>
+            Download
+          </button>
           <button type="button" onClick={handleSubmitClick} className="shimmer-btn px-5 py-2.5 rounded-xl text-gray-900 text-sm font-semibold">
             {isDirty ? "Submit with changes" : "Submit invoices"}
           </button>

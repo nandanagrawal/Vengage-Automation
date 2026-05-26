@@ -416,6 +416,46 @@ export async function apiGenerateInvoices(req: GenerateRequest): Promise<Generat
   return apiPost<GenerateJobResponse>("/invoice-uploads/generate", req);
 }
 
+export type SheetConfigResponse = {
+  last_invoice_no: string | null;
+  service_code_products: { name: string; code: string }[];
+};
+
+export async function apiGetSheetConfig(): Promise<SheetConfigResponse> {
+  return apiGet<SheetConfigResponse>("/invoice-uploads/sheet-config");
+}
+
+export type LineItemPreviewLineItem = {
+  product_name: string;
+  description: string;
+  quantity: number;
+  rate: number;
+  amount: number;
+  tax_amount: number;
+  tax_code: string;
+};
+
+export type LineItemPreviewInvoice = {
+  invoice_no: number;
+  customer_display_name: string;
+  line_items: LineItemPreviewLineItem[];
+};
+
+export type LineItemPreviewResponse = {
+  last_invoice_no: string | null;
+  invoice_date: string;
+  due_date: string;
+  memo: string;
+  invoices: LineItemPreviewInvoice[];
+};
+
+export async function apiGetLineItemPreview(
+  metric_columns: string[],
+  rows: ValidatedRow[],
+): Promise<LineItemPreviewResponse> {
+  return apiPost<LineItemPreviewResponse>("/invoice-uploads/line-item-preview", { metric_columns, rows });
+}
+
 export type AuthToken = { access_token: string; token_type: string };
 
 export type CurrentUser = {

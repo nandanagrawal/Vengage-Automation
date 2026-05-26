@@ -5,8 +5,11 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import get_current_user, get_qbo_client, get_db
 from app.models.customer import Customer
+from app.models.customer_product_and_service import CustomerProductAndService
 from app.models.generated_invoice import GeneratedInvoice
 from app.models.invoice_upload import InvoiceUpload
+from app.models.product_and_service import ProductAndService
+from app.models.service_code import ServiceCode
 from app.models.user import User
 from app.schemas.invoice_validation import (
     GenerateRequest,
@@ -15,6 +18,7 @@ from app.schemas.invoice_validation import (
     ValidationResponse,
 )
 from app.services.invoice_generation import (
+    build_line_item_preview,
     generate_invoices,
     generate_invoices_from_parsed,
 )
@@ -131,6 +135,43 @@ def list_uploads(
         }
         for r in rows
     ]
+
+
+@router.post("/invoice-uploads/line-item-preview")
+def line_item_preview_route(
+    body: RevalidateRequest,
+    db: Session = Depends(get_db),
+    _user: User = Depends(get_current_user),
+):
+    return build_line_item_preview(body, db)
+
+
+@router.get("/invoice-uploads/sheet-config")
+def get_sheet_config(
+    db: Session = Depends(get_db),
+    _user: User = Depends(get_current_user),
+):
+    last_inv = (
+        db.query(GeneratedInvoice.invoice_number)
+        .filter(GeneratedInvoice.invoice_number.isnot(None))
+        .order_by(GeneratedInvoice.id.desc())
+        .first()
+    )
+    last_invoice_no = last_inv[0] if last_inv else None
+
+    mappings = (
+        db.query(ProductAndService.name, ServiceCode.code)
+        .join(CustomerProductAndService, CustomerProductAndService.product_and_service_id == ProductAndService.id)
+        .join(ServiceCode, ServiceCode.id == CustomerProductAndService.service_code_id)
+        .distinct()
+        .order_by(ServiceCode.code, ProductAndService.name)
+        .all()
+    )
+
+    return {
+        "last_invoice_no": last_invoice_no,
+        "service_code_products": [{"name": m[0], "code": m[1]} for m in mappings],
+    }
 
 
 @router.get("/invoice-uploads/{upload_id}")

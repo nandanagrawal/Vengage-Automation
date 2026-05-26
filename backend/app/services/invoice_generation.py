@@ -710,3 +710,142 @@ def _create_and_send(
         result.errors.append(
             f"Customer '{customer.display_name}' / {label}: failed to create invoice — {err}"
         )
+
+
+# ── Dry-run line-item preview (for Sheet 2 download) ─────────────────────────
+
+def build_line_item_preview(body: "RevalidateRequest", db: Session) -> dict:
+    """
+    Dry-run of invoice generation.  Returns the data needed to build the
+    QBO-format Sheet 2 (invoice line items) without touching QBO or the DB.
+    """
+    from app.schemas.invoice_validation import RevalidateRequest  # local to avoid circular
+    from app.services.invoice_validation import _rows_to_parsed_file
+
+    parsed = _rows_to_parsed_file(body.rows, body.metric_columns)
+    # Preview uses the PREVIOUS month's last day (invoices are for the period just ended)
+    today = date.today()
+    first_of_current = date(today.year, today.month, 1)
+    inv_date = first_of_current - timedelta(days=1)  # last day of previous month
+    due = _due_date(inv_date)
+    memo = _memo(inv_date)
+    month_label = _month_label(inv_date)
+
+    # Last invoice number from DB
+    last_inv = (
+        db.query(GeneratedInvoice.invoice_number)
+        .filter(GeneratedInvoice.invoice_number.isnot(None))
+        .order_by(GeneratedInvoice.id.desc())
+        .first()
+    )
+    last_invoice_no_str = last_inv[0] if last_inv else None
+    try:
+        last_invoice_no_int = int(last_invoice_no_str) if last_invoice_no_str else 0
+    except ValueError:
+        last_invoice_no_int = 0
+
+    # Match centers to DB
+    names_in_file = list(parsed.rows.keys())
+    centers_in_db: list[Center] = (
+        db.query(Center)
+        .filter(sa_func.lower(Center.name).in_(names_in_file))
+        .all()
+    )
+    center_by_name: dict[str, Center] = {c.name.lower(): c for c in centers_in_db}
+    matched_names = [n for n in names_in_file if n in center_by_name]
+    customer_ids = {center_by_name[n].company_id for n in matched_names}
+
+    customers: list[Customer] = (
+        db.query(Customer)
+        .filter(Customer.id.in_(customer_ids))
+        .options(
+            selectinload(Customer.customer_services)
+            .selectinload(CustomerProductAndService.product_and_service),
+            selectinload(Customer.customer_services)
+            .selectinload(CustomerProductAndService.service_code),
+        )
+        .all()
+    )
+    customer_by_id: dict[int, Customer] = {c.id: c for c in customers}
+
+    invoices: list[Invoice] = (
+        db.query(Invoice)
+        .options(selectinload(Invoice.centers))
+        .filter(Invoice.company_id.in_(customer_ids))
+        .all()
+    )
+    invoices_by_company: dict[int, list[Invoice]] = {}
+    for inv in invoices:
+        invoices_by_company.setdefault(inv.company_id, []).append(inv)
+
+    result_invoices: list[dict] = []
+    inv_offset = 0
+
+    for company_id in sorted(customer_ids):
+        customer = customer_by_id.get(company_id)
+        if not customer or not customer.qbo_id:
+            continue
+
+        customer_centers = [n for n in matched_names if center_by_name[n].company_id == company_id]
+        if not customer_centers:
+            continue
+
+        active_services = [
+            cs for cs in customer.customer_services
+            if cs.product_and_service.active and cs.rate and cs.rate > 0
+        ]
+        if not active_services:
+            continue
+
+        center_id_to_inv: dict[int, Invoice | None] = {
+            center_by_name[n].id: None for n in customer_centers
+        }
+        for inv in invoices_by_company.get(company_id, []):
+            for c in inv.centers:
+                if c.id in center_id_to_inv:
+                    center_id_to_inv[c.id] = inv
+
+        group_map: dict[int | None, list[str]] = {}
+        for name_lower in customer_centers:
+            ctr = center_by_name[name_lower]
+            key = center_id_to_inv.get(ctr.id)
+            group_map.setdefault(key.id if key else None, []).append(name_lower)
+
+        for _group_key, group_names_lower in group_map.items():
+            line_items: list[dict] = []
+            for name_lower in group_names_lower:
+                center_metrics = parsed.rows.get(name_lower, {})
+                center_prefix = parsed.center_prefixes.get(name_lower, name_lower)
+                items = _build_line_items_for_center(
+                    center_prefix=center_prefix,
+                    center_metrics=center_metrics,
+                    customer_services=active_services,
+                    month_label=month_label,
+                )
+                for li in items:
+                    tax_amount = (li.amount * Decimal("0.1")).quantize(Decimal("0.0001"))
+                    line_items.append({
+                        "product_name": li.product_name,
+                        "description": li.description,
+                        "quantity": float(li.quantity),
+                        "rate": float(li.rate),
+                        "amount": float(li.amount),
+                        "tax_amount": float(tax_amount),
+                        "tax_code": "GST",
+                    })
+
+            if line_items:
+                inv_offset += 1
+                result_invoices.append({
+                    "invoice_no": last_invoice_no_int + inv_offset,
+                    "customer_display_name": customer.display_name,
+                    "line_items": line_items,
+                })
+
+    return {
+        "last_invoice_no": last_invoice_no_str,
+        "invoice_date": inv_date.strftime("%d/%m/%Y"),
+        "due_date": due.strftime("%d/%m/%Y"),
+        "memo": memo,
+        "invoices": result_invoices,
+    }

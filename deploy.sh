@@ -23,17 +23,17 @@ npm install --legacy-peer-deps
 echo "==> Building frontend..."
 npm run build
 
+echo "==> Copying build to /var/www..."
+sudo cp -rf "$FRONTEND_DIR/.next" /var/www/Vengage-Automation/frontend/
+
 echo "==> Restarting services..."
-# Start backend if not already registered, otherwise restart
-if pm2 describe backend > /dev/null 2>&1; then
-  pm2 restart backend --update-env
-else
-  pm2 start "$VENV_UVICORN" \
-    --name backend \
-    --interpreter "$VENV_PYTHON" \
-    --cwd "$BACKEND_DIR" \
-    -- app.main:app --host 0.0.0.0 --port 8000
-fi
+# Always delete and recreate backend to ensure --cwd and interpreter are correct
+pm2 delete backend 2>/dev/null || true
+pm2 start "$VENV_UVICORN" \
+  --name backend \
+  --interpreter "$VENV_PYTHON" \
+  --cwd "$BACKEND_DIR" \
+  -- app.main:app --host 0.0.0.0 --port 8000
 
 # Start frontend if not already registered, otherwise restart
 if pm2 describe frontend > /dev/null 2>&1; then

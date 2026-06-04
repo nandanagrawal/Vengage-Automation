@@ -16,6 +16,9 @@ echo "==> Installing backend dependencies..."
 cd "$BACKEND_DIR"
 $VENV_PIP install -r requirements.txt --quiet
 
+echo "==> Running database migrations..."
+"$BACKEND_DIR/venv/bin/alembic" upgrade head
+
 echo "==> Installing frontend dependencies..."
 cd "$FRONTEND_DIR"
 npm install --legacy-peer-deps

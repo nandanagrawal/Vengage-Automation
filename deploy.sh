@@ -31,6 +31,7 @@ else
   pm2 start "$VENV_UVICORN" \
     --name backend \
     --interpreter "$VENV_PYTHON" \
+    --cwd "$BACKEND_DIR" \
     -- app.main:app --host 0.0.0.0 --port 8000
 fi
 

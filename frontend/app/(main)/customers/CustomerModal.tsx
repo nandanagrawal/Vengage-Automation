@@ -2,6 +2,7 @@
 
 import type { FormEvent, ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import type { CenterRow, CustomerRow, CustomerTypeRow, ProductAndServiceRow, ServiceCodeRow } from "@/lib/api";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 
@@ -379,7 +380,7 @@ export function CustomerModal({
   const activeProducts = productOptions.filter((p) => p.active);
   const activeServiceCodes = serviceCodeOptions.filter((sc) => sc.status);
 
-  return (
+  return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/30 backdrop-blur-sm animate-fadeInUp">
       <div className="w-full max-w-4xl max-h-[90vh] overflow-y-auto rounded-2xl border border-gray-200 shadow-2xl" style={{ background: "var(--surface)" }}>
         <div className="sticky top-0 z-10 flex items-center justify-between px-6 py-4 border-b border-gray-200" style={{ background: "var(--surface)" }}>
@@ -807,6 +808,7 @@ export function CustomerModal({
           </div>
         </form>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }

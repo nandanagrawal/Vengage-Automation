@@ -3,7 +3,8 @@
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
-import { apiGet, type CustomerRow } from "@/lib/api";
+import { apiGet, apiPatch, type CustomerRow } from "@/lib/api";
+import { CustomerModal } from "../CustomerModal";
 
 function statusStyle(s: string) {
   if (s === "approved") return { label: "Approved", cls: "text-emerald-700 bg-emerald-50 border-emerald-200" };
@@ -42,6 +43,8 @@ export default function CustomerDetailPage() {
   const [customer, setCustomer] = useState<CustomerRow | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [editOpen, setEditOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     setLoading(true);
@@ -66,14 +69,46 @@ export default function CustomerDetailPage() {
 
   const ss = statusStyle(customer.status);
 
+  const onEdit = async (payload: Record<string, unknown>) => {
+    setSaving(true);
+    try {
+      const updated = await apiPatch<CustomerRow>(`/customers/${customerId}`, payload);
+      setCustomer(updated);
+      setEditOpen(false);
+      return updated;
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
     <div className="max-w-4xl mx-auto animate-fadeInUp">
-      <Link href="/customers" className="inline-flex items-center gap-1.5 text-gray-400 hover:text-gray-600 text-sm mb-5 transition-colors">
-        <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
-        </svg>
-        Customers
-      </Link>
+      <div className="flex items-center justify-between mb-5">
+        <Link href="/customers" className="inline-flex items-center gap-1.5 text-gray-400 hover:text-gray-600 text-sm transition-colors">
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
+          </svg>
+          Customers
+        </Link>
+        <button
+          onClick={() => setEditOpen(true)}
+          className="btn btn-secondary inline-flex items-center gap-2"
+        >
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+          </svg>
+          Edit
+        </button>
+      </div>
+
+      <CustomerModal
+        open={editOpen}
+        onClose={() => setEditOpen(false)}
+        onSubmit={onEdit}
+        submitting={saving}
+        mode="edit"
+        customer={customer}
+      />
 
       <div className="flex items-center gap-4 mb-6">
         <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-indigo-500/30 to-violet-600/30 border border-indigo-200 flex items-center justify-center text-indigo-600 text-xl font-bold shrink-0">

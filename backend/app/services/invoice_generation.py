@@ -54,6 +54,7 @@ from typing import Any
 from sqlalchemy import func as sa_func
 from sqlalchemy.orm import Session, selectinload
 
+from app.core.config import settings
 from app.models.center import Center
 from app.models.customer import Customer
 from app.models.customer_product_and_service import CustomerProductAndService
@@ -397,7 +398,7 @@ def _build_line_items_for_center(
                 "ItemRef": {"value": ps.qbo_id},
                 "Qty": float(qty),
                 "UnitPrice": float(rate),
-                "TaxCodeRef": {"value": "NON"},
+                "TaxCodeRef": {"value": settings.QBO_LINE_TAX_CODE},
             },
         }
         items.append(_LineItem(

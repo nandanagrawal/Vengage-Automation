@@ -33,7 +33,7 @@ def _apply_customer_service_links(
 
     # Validate all referenced product IDs and service code IDs exist
     ps_ids = [s.product_and_service_id for s in services]
-    sc_ids = [s.service_code_id for s in services]
+    sc_ids = [s.service_code_id for s in services if s.service_code_id is not None]
 
     ps_rows = {
         ps.id: ps
@@ -42,7 +42,7 @@ def _apply_customer_service_links(
     sc_rows = {
         sc.id: sc
         for sc in db.query(ServiceCode).filter(ServiceCode.id.in_(sc_ids)).all()
-    }
+    } if sc_ids else {}
 
     missing_ps = sorted(set(ps_ids) - set(ps_rows))
     if missing_ps:

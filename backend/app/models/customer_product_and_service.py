@@ -22,8 +22,8 @@ class CustomerProductAndService(Base):
     product_and_service_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("product_and_services.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    service_code_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("service_codes.id", ondelete="RESTRICT"), nullable=False, index=True
+    service_code_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("service_codes.id", ondelete="RESTRICT"), nullable=True, index=True
     )
     rate: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False)
 

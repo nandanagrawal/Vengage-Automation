@@ -278,9 +278,25 @@ export function CustomerModal({
     onClose();
   };
 
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  const validateEmailList = (val: string) =>
+    val.split(",").map((e) => e.trim()).filter(Boolean).every((e) => emailRegex.test(e));
+
   const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (!form.display_name.trim()) return;
+    if (form.primary_email && !validateEmailList(form.primary_email)) {
+      alert("Invalid email address(es) in Email field. Separate multiple emails with commas.");
+      return;
+    }
+    if (form.cc_email && !validateEmailList(form.cc_email)) {
+      alert("Invalid email address(es) in Cc field. Separate multiple emails with commas.");
+      return;
+    }
+    if (form.bcc_email && !validateEmailList(form.bcc_email)) {
+      alert("Invalid email address(es) in Bcc field. Separate multiple emails with commas.");
+      return;
+    }
 
     const billing: Record<string, string | undefined> = {
       line1: form.billing_line1 || undefined, line2: form.billing_line2 || undefined,
@@ -299,10 +315,10 @@ export function CustomerModal({
     const hasShip = Object.values(shipping).some(Boolean);
 
     const validServices = serviceRows
-      .filter((r) => r.product_and_service_id !== "" && r.service_code_id !== "" && parseFloat(r.rate) > 0)
+      .filter((r) => r.product_and_service_id !== "" && parseFloat(r.rate) > 0)
       .map((r) => ({
         product_and_service_id: r.product_and_service_id as number,
-        service_code_id: r.service_code_id as number,
+        service_code_id: r.service_code_id !== "" ? r.service_code_id as number : null,
         rate: r.rate,
       }));
 
@@ -405,7 +421,7 @@ export function CustomerModal({
             <div className="grid md:grid-cols-2 gap-3 mb-3">
               <div>
                 <label className={labelCls()}>Email</label>
-                <input type="email" className={fieldCls()} value={form.primary_email} onChange={(e) => update("primary_email", e.target.value)} />
+                <input type="text" className={fieldCls()} value={form.primary_email} onChange={(e) => update("primary_email", e.target.value)} placeholder="e.g. a@example.com, b@example.com" />
               </div>
               <div>
                 <label className={labelCls()}>Phone number</label>

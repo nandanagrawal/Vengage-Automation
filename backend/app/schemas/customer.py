@@ -1,9 +1,21 @@
 from datetime import datetime
 from decimal import Decimal
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, EmailStr, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, EmailStr, Field, TypeAdapter, field_validator
 
 from app.models.customer import Customer, CustomerStatus
+
+
+_email_adapter: TypeAdapter[EmailStr] = TypeAdapter(EmailStr)
+
+
+def _validate_emails(v: str | None) -> str | None:
+    if not v:
+        return v
+    parts = [e.strip() for e in v.split(",") if e.strip()]
+    for part in parts:
+        _email_adapter.validate_python(part)
+    return ", ".join(parts)
 
 
 class AddressMixin(BaseModel):
@@ -19,14 +31,14 @@ class AddressMixin(BaseModel):
 
 class CustomerServiceInput(BaseModel):
     product_and_service_id: int
-    service_code_id: int
+    service_code_id: int | None = None
     rate: Decimal = Field(..., gt=0, description="Must be greater than zero")
 
 
 class CustomerServiceResponse(BaseModel):
     id: int
     product_and_service_id: int
-    service_code_id: int
+    service_code_id: int | None = None
     rate: Decimal
 
     model_config = ConfigDict(from_attributes=True)
@@ -43,10 +55,15 @@ class CustomerCreate(BaseModel):
     company_name: str | None = None
     display_name: str = Field(..., min_length=1, max_length=500)
 
-    primary_email: EmailStr | None = None
+    primary_email: str | None = None
     phone_number: str | None = None
-    cc_email: EmailStr | None = None
-    bcc_email: EmailStr | None = None
+    cc_email: str | None = None
+    bcc_email: str | None = None
+
+    @field_validator("primary_email", "cc_email", "bcc_email", mode="before")
+    @classmethod
+    def validate_emails(cls, v: str | None) -> str | None:
+        return _validate_emails(v)
     mobile: str | None = None
     fax: str | None = None
     other_contact: str | None = None
@@ -74,10 +91,15 @@ class CustomerUpdate(BaseModel):
     company_name: str | None = None
     display_name: str | None = Field(None, min_length=1, max_length=500)
 
-    primary_email: EmailStr | None = None
+    primary_email: str | None = None
     phone_number: str | None = None
-    cc_email: EmailStr | None = None
-    bcc_email: EmailStr | None = None
+    cc_email: str | None = None
+    bcc_email: str | None = None
+
+    @field_validator("primary_email", "cc_email", "bcc_email", mode="before")
+    @classmethod
+    def validate_emails(cls, v: str | None) -> str | None:
+        return _validate_emails(v)
     mobile: str | None = None
     fax: str | None = None
     other_contact: str | None = None

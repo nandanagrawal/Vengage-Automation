@@ -459,6 +459,9 @@ def _build_qbo_invoice_payload(
         "GlobalTaxCalculation": "TaxExcluded",
         "Line": [li.qbo_payload for li in all_line_items],
     }
+    if customer.primary_email:
+        # QBO BillEmail accepts comma-separated addresses for multi-recipient drafts
+        payload["BillEmail"] = {"Address": customer.primary_email}
     return payload, total, all_line_items
 
 

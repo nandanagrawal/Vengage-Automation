@@ -692,10 +692,10 @@ def _create_and_send(
     try:
         qbo_inv = qbo.create_invoice(access_token, realm_id, payload)
         inv_id = str(qbo_inv.get("Id", ""))
-        inv_number: str | None = qbo_inv.get("DocNumber")
+        inv_number: str | None = qbo_inv.get("DocNumber") or None
 
-        # Only persist locally once QBO confirms with an invoice number
-        if invoice_upload_id is not None and inv_number:
+        gen_inv_id: int | None = None
+        if invoice_upload_id is not None and inv_id:
             gen_inv = GeneratedInvoice(
                 invoice_upload_id=invoice_upload_id,
                 customer_id=customer.id,
@@ -728,6 +728,7 @@ def _create_and_send(
                 ))
 
             db.commit()
+            gen_inv_id = gen_inv.id
 
         result.invoices_created += 1
         result.invoice_details.append(
@@ -738,7 +739,7 @@ def _create_and_send(
                 invoice_number=inv_number,
                 sent_at=None,
                 send_status="pending",
-                generated_invoice_id=gen_inv.id if invoice_upload_id and inv_number else None,
+                generated_invoice_id=gen_inv_id,
             )
         )
     except Exception as err:

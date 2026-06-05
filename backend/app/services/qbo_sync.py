@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import date, datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
+
+logger = logging.getLogger(__name__)
 
 from app.core.config import settings
 from app.models.customer import Customer, CustomerStatus
@@ -211,21 +214,30 @@ def run_quickbooks_sync(db: Session, qbo: SupportsQuickBooks | None = None) -> S
             should_push = ua > last_push
 
         if should_push:
-            updated = client.update_customer(
-                token,
-                realm,
-                row.qbo_id,
-                payload,
-                row.qbo_sync_token,
-            )
-            row.qbo_sync_token = str(updated.get("SyncToken", "")) or row.qbo_sync_token
-            t = qbo_time(updated)
-            if t:
-                row.qbo_last_updated = t
-            row.last_pushed_to_qbo_at = datetime.now(timezone.utc)
-            db.add(row)
-            db.commit()
-            pushed += 1
+            try:
+                updated = client.update_customer(
+                    token,
+                    realm,
+                    row.qbo_id,
+                    payload,
+                    row.qbo_sync_token,
+                )
+                row.qbo_sync_token = str(updated.get("SyncToken", "")) or row.qbo_sync_token
+                t = qbo_time(updated)
+                if t:
+                    row.qbo_last_updated = t
+                row.last_pushed_to_qbo_at = datetime.now(timezone.utc)
+                db.add(row)
+                db.commit()
+                pushed += 1
+            except Exception as exc:
+                # Skip customers QBO won't let us update (e.g. billing relationship
+                # locked by existing invoices — QBO error 6130). Mark as pushed so
+                # we don't retry every sync.
+                logger.warning("Skipping customer push for '%s' (qbo_id=%s): %s", row.display_name, row.qbo_id, exc)
+                row.last_pushed_to_qbo_at = datetime.now(timezone.utc)
+                db.add(row)
+                db.commit()
 
     items_upserted, items_removed_local = _sync_items_from_qbo(db, client, token, realm)
 

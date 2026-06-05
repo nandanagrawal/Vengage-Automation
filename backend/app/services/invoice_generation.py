@@ -67,6 +67,31 @@ from app.models.invoice import Invoice
 from app.models.product_and_service import ProductAndService
 from app.services.qbo_client import SupportsQuickBooks
 
+# Module-level cache: maps "realm_id:code_name" → resolved QBO TaxCode Id
+_tax_code_id_cache: dict[str, str] = {}
+
+
+def _resolve_tax_code_id(qbo: SupportsQuickBooks, token: str, realm: str, code: str) -> str:
+    """Resolve a tax code name (e.g. 'GST') to its QBO Id (e.g. '5').
+
+    If `code` is already numeric it is returned as-is.
+    Falls back to the original value if the lookup fails.
+    """
+    if code.isdigit():
+        return code
+    cache_key = f"{realm}:{code.lower()}"
+    if cache_key in _tax_code_id_cache:
+        return _tax_code_id_cache[cache_key]
+    try:
+        for tc in qbo.query_tax_codes(token, realm):
+            if str(tc.get("Name", "")).lower() == code.lower():
+                resolved = str(tc["Id"])
+                _tax_code_id_cache[cache_key] = resolved
+                return resolved
+    except Exception:
+        pass
+    return code
+
 
 # ── Product → metric-column mapping ──────────────────────────────────────────
 #
@@ -375,6 +400,7 @@ def _build_line_items_for_center(
     center_metrics: dict[str, Decimal],
     customer_services: list[CustomerProductAndService],
     month_label: str,
+    tax_code_id: str = "",
 ) -> list[_LineItem]:
     """Build one _LineItem per (customer service) for a single center."""
     items: list[_LineItem] = []
@@ -400,7 +426,7 @@ def _build_line_items_for_center(
                 "ItemRef": {"value": ps.qbo_id},
                 "Qty": float(qty),
                 "UnitPrice": float(rate),
-                "TaxCodeRef": {"value": settings.QBO_LINE_TAX_CODE},
+                "TaxCodeRef": {"value": tax_code_id or settings.QBO_LINE_TAX_CODE},
             },
         }
         items.append(_LineItem(
@@ -423,6 +449,7 @@ def _build_qbo_invoice_payload(
     center_by_name: dict[str, Center],
     customer_services: list[CustomerProductAndService],
     inv_date: date,
+    tax_code_id: str = "",
 ) -> tuple[dict[str, Any], Decimal, list[_LineItem]] | None:
     """Build the QBO invoice payload with per-center line items."""
     month_label = _month_label(inv_date)
@@ -446,6 +473,7 @@ def _build_qbo_invoice_payload(
             center_metrics=center_metrics,
             customer_services=customer_services,
             month_label=month_label,
+            tax_code_id=tax_code_id,
         )
         all_line_items.extend(items)
 
@@ -478,6 +506,10 @@ def generate_invoices_from_parsed(
 ) -> GenerationResult:
     """Run invoice generation from a pre-built ParsedFile (skips file parsing)."""
     result = GenerationResult()
+
+    # Resolve the configured tax code name (e.g. "GST") to its QBO Id (e.g. "5").
+    # Australian QBO requires the numeric Id, not the name string.
+    tax_code_id = _resolve_tax_code_id(qbo, access_token, realm_id, settings.QBO_LINE_TAX_CODE)
 
     if not parsed.rows:
         result.errors.append("File contains no data rows.")
@@ -584,6 +616,7 @@ def generate_invoices_from_parsed(
                         customer_services=active_services, inv_date=inv_date,
                         result=result, is_standalone=True,
                         invoice_upload_id=invoice_upload_id,
+                        tax_code_id=tax_code_id,
                     )
             else:
                 _create_and_send(
@@ -593,6 +626,7 @@ def generate_invoices_from_parsed(
                     customer_services=active_services, inv_date=inv_date,
                     result=result, is_standalone=False,
                     invoice_upload_id=invoice_upload_id,
+                    tax_code_id=tax_code_id,
                 )
 
     return result
@@ -631,6 +665,7 @@ def _create_and_send(
     result: GenerationResult,
     is_standalone: bool,
     invoice_upload_id: int | None = None,
+    tax_code_id: str = "",
 ) -> None:
     label = (
         f"{center_names[0]} (standalone)"
@@ -644,6 +679,7 @@ def _create_and_send(
         center_by_name=center_by_name,
         customer_services=customer_services,
         inv_date=inv_date,
+        tax_code_id=tax_code_id,
     )
     if built is None:
         result.errors.append(

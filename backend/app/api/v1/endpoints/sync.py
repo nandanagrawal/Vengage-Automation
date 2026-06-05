@@ -36,7 +36,7 @@ def sync_push_item_tax_codes(
     qbo: SupportsQuickBooks = Depends(get_qbo_client),
     _user: User = Depends(get_current_user),
 ):
-    """Set SalesTaxCodeRef = BAS (10% GST) on every product/service item in QBO."""
+    """Set SalesTaxCodeRef = GST (10% Australian GST) on every product/service item in QBO."""
     try:
         ensure_qbo_credentials()
     except RuntimeError as e:

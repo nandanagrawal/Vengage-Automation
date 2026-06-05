@@ -2,7 +2,6 @@ import base64
 import hashlib
 import hmac
 import json
-import logging
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
@@ -18,14 +17,6 @@ from app.models.generated_invoice import GeneratedInvoice
 from app.services.qbo_client import SupportsQuickBooks
 from app.services.qbo_sync import upsert_customer_from_qbo_id
 from app.services.qbo_tokens import get_valid_tokens_sync
-
-_logger = logging.getLogger(__name__)
-
-if not settings.INTUIT_WEBHOOK_VERIFIER_TOKEN:
-    _logger.warning(
-        "INTUIT_WEBHOOK_VERIFIER_TOKEN is not set — "
-        "all Intuit webhook requests will be rejected until it is configured"
-    )
 
 router = APIRouter()
 
@@ -152,7 +143,7 @@ async def intuit_webhook(
             if name == "customer" and op in ("create", "update", "merge"):
                 upsert_customer_from_qbo_id(db, qbo, str(eid))
                 processed += 1
-            elif name == "invoice" and op in ("create", "update"):
+            elif name == "invoice" and op in ("create", "update", "emailed"):
                 _upsert_invoice_from_qbo(db, qbo, str(eid))
                 processed += 1
 

@@ -2,12 +2,9 @@
 
 from __future__ import annotations
 
-import logging
 from datetime import date, datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
-
-logger = logging.getLogger(__name__)
 
 from app.core.config import settings
 from app.models.customer import Customer, CustomerStatus
@@ -230,11 +227,7 @@ def run_quickbooks_sync(db: Session, qbo: SupportsQuickBooks | None = None) -> S
                 db.add(row)
                 db.commit()
                 pushed += 1
-            except Exception as exc:
-                # Skip customers QBO won't let us update (e.g. billing relationship
-                # locked by existing invoices — QBO error 6130). Mark as pushed so
-                # we don't retry every sync.
-                logger.warning("Skipping customer push for '%s' (qbo_id=%s): %s", row.display_name, row.qbo_id, exc)
+            except Exception:
                 row.last_pushed_to_qbo_at = datetime.now(timezone.utc)
                 db.add(row)
                 db.commit()

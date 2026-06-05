@@ -19,6 +19,7 @@ router = APIRouter()
 def sync_quickbooks(
     db: Session = Depends(get_db),
     qbo: SupportsQuickBooks = Depends(get_qbo_client),
+    _user: User = Depends(get_current_user),
 ):
     try:
         ensure_qbo_credentials()

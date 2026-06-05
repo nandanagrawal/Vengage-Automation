@@ -45,7 +45,6 @@ from __future__ import annotations
 
 import calendar
 import csv
-import logging
 import io
 from dataclasses import dataclass, field
 from datetime import date, timedelta
@@ -68,8 +67,6 @@ from app.models.invoice import Invoice
 from app.models.product_and_service import ProductAndService
 from app.services.qbo_client import SupportsQuickBooks
 
-logger = logging.getLogger(__name__)
-
 # Module-level cache: maps "realm_id:code_name" → resolved QBO TaxCode Id
 _tax_code_id_cache: dict[str, str] = {}
 
@@ -86,7 +83,8 @@ def _resolve_tax_code_id(qbo: SupportsQuickBooks, token: str, realm: str, code: 
     if cache_key in _tax_code_id_cache:
         return _tax_code_id_cache[cache_key]
     try:
-        for tc in qbo.query_tax_codes(token, realm):
+        codes = qbo.query_tax_codes(token, realm)
+        for tc in codes:
             if str(tc.get("Name", "")).lower() == code.lower():
                 resolved = str(tc["Id"])
                 _tax_code_id_cache[cache_key] = resolved
@@ -494,7 +492,6 @@ def _build_qbo_invoice_payload(
         "Line": [li.qbo_payload for li in all_line_items],
     }
     if customer.primary_email:
-        # QBO BillEmail accepts comma-separated addresses for multi-recipient drafts
         payload["BillEmail"] = {"Address": customer.primary_email}
     return payload, total, all_line_items
 
@@ -694,7 +691,6 @@ def _create_and_send(
 
     try:
         qbo_inv = qbo.create_invoice(access_token, realm_id, payload)
-        logger.info("QBO create_invoice response keys: %s | Id=%s DocNumber=%s", list(qbo_inv.keys()), qbo_inv.get("Id"), qbo_inv.get("DocNumber"))
         inv_id = str(qbo_inv.get("Id", ""))
         inv_number: str | None = qbo_inv.get("DocNumber") or None
 

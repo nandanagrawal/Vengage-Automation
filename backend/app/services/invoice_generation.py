@@ -400,6 +400,7 @@ def _build_line_items_for_center(
                 "ItemRef": {"value": ps.qbo_id},
                 "Qty": float(qty),
                 "UnitPrice": float(rate),
+                "TaxCodeRef": {"value": settings.QBO_LINE_TAX_CODE},
             },
         }
         items.append(_LineItem(

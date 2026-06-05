@@ -90,6 +90,49 @@ def _sync_items_from_qbo(
     return upserted, removed
 
 
+def push_item_tax_codes(db: Session, qbo: SupportsQuickBooks | None = None) -> dict:
+    """Force-update SalesTaxCodeRef on every QBO item to settings.QBO_LINE_TAX_CODE."""
+    client = qbo or QuickBooksClient()
+    token, realm = ensure_qbo_credentials()
+
+    raw = client.query_items(token, realm)
+    updated = 0
+    skipped = 0
+    failed: list[str] = []
+
+    for qbo_item in raw:
+        qid = str(qbo_item.get("Id", ""))
+        if not qid:
+            continue
+        current_tax = (qbo_item.get("SalesTaxCodeRef") or {}).get("value")
+        sync_token = str(qbo_item.get("SyncToken", "")) or None
+        if not sync_token:
+            failed.append(f"{qbo_item.get('Name', qid)}: missing SyncToken")
+            continue
+        if current_tax == settings.QBO_LINE_TAX_CODE:
+            skipped += 1
+            continue
+        try:
+            client.update_item(token, realm, {
+                "sparse": True,
+                "Id": qid,
+                "Name": qbo_item.get("Name", ""),
+                "SyncToken": sync_token,
+                "SalesTaxCodeRef": {"value": settings.QBO_LINE_TAX_CODE},
+            })
+            updated += 1
+        except Exception as exc:
+            failed.append(f"{qbo_item.get('Name', qid)}: {exc}")
+
+    return {
+        "tax_code": settings.QBO_LINE_TAX_CODE,
+        "items_updated": updated,
+        "items_already_correct": skipped,
+        "items_failed": len(failed),
+        "failures": failed,
+    }
+
+
 def run_quickbooks_sync(db: Session, qbo: SupportsQuickBooks | None = None) -> SyncResult:
     client = qbo or QuickBooksClient()
     token, realm = ensure_qbo_credentials()

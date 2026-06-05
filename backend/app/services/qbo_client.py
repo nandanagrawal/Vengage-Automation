@@ -42,6 +42,8 @@ class SupportsQuickBooks(Protocol):
 
     def query_items(self, access_token: str, realm_id: str) -> list[dict[str, Any]]: ...
 
+    def query_tax_codes(self, access_token: str, realm_id: str) -> list[dict[str, Any]]: ...
+
     def update_item(
         self,
         access_token: str,
@@ -216,6 +218,17 @@ class QuickBooksClient:
                     break
                 start += page_size
         return out
+
+    def query_tax_codes(self, access_token: str, realm_id: str) -> list[dict[str, Any]]:
+        """Return all TaxCode objects from QBO (shows valid codes for TaxCodeRef)."""
+        q = quote("SELECT * FROM TaxCode MAXRESULTS 100")
+        url = f"{self.base_url()}/v3/company/{realm_id}/query?query={q}&minorversion={self._minor()}"
+        with httpx.Client(timeout=30.0) as client:
+            res = client.get(url, headers=_headers(access_token))
+            res.raise_for_status()
+            data = res.json()
+            result = data.get("QueryResponse", {}).get("TaxCode", []) or []
+            return result if isinstance(result, list) else [result]
 
     def update_item(
         self,

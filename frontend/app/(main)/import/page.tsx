@@ -841,6 +841,7 @@ export default function ImportPage() {
               sent_at: inv.sent_at,
               send_status: inv.send_status,
               sent: inv.send_status === "sent",
+              generated_invoice_id: inv.id,
             })),
             errors: detail.errors,
           };

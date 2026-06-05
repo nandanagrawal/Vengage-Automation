@@ -231,6 +231,7 @@ export type InvoiceUploadDetail = {
   sent_at: string | null;
   send_status: string;
   sent: boolean;
+  generated_invoice_id: number | null;
 };
 
 export type InvoiceUploadResult = {

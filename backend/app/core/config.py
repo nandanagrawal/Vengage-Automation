@@ -82,9 +82,8 @@ class Settings(BaseSettings):
 
     INTUIT_WEBHOOK_VERIFIER_TOKEN: str | None = None
 
-    # Tax code applied to each invoice line item.
-    # "NON" = US sandbox. For AU use "BAS Excluded", for IN use the appropriate GST code.
-    QBO_LINE_TAX_CODE: str = "NON"
+    # Tax code applied to each invoice line item. GST = 10% Australian GST.
+    QBO_LINE_TAX_CODE: str = "GST"
 
     # Auth
     JWT_SECRET: str = _INSECURE_JWT_DEFAULT

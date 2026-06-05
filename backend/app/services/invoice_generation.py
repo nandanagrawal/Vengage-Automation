@@ -329,6 +329,7 @@ class InvoiceDetail:
     invoice_number: str | None
     sent_at: str | None
     send_status: str
+    generated_invoice_id: int | None = None
 
     @property
     def sent(self) -> bool:
@@ -361,6 +362,7 @@ class GenerationResult:
                     "sent_at": d.sent_at,
                     "send_status": d.send_status,
                     "sent": d.sent,
+                    "generated_invoice_id": d.generated_invoice_id,
                 }
                 for d in self.invoice_details
             ],
@@ -651,49 +653,45 @@ def _create_and_send(
 
     payload, total_amount, line_items = built
 
-    gen_inv: GeneratedInvoice | None = None
-    if invoice_upload_id is not None:
-        gen_inv = GeneratedInvoice(
-            invoice_upload_id=invoice_upload_id,
-            customer_id=customer.id,
-            center_group_name=label,
-            total_amount=total_amount,
-            send_status="pending",
-        )
-        db.add(gen_inv)
-        db.flush()
-
-        for name in center_names:
-            ctr = center_by_name.get(name.lower())
-            db.add(GeneratedInvoiceCenter(
-                generated_invoice_id=gen_inv.id,
-                center_id=ctr.id if ctr else None,
-                center_name=name,
-            ))
-
-        for li in line_items:
-            db.add(GeneratedInvoiceLineItem(
-                generated_invoice_id=gen_inv.id,
-                product_and_service_id=li.product_and_service_id,
-                product_name=li.product_name,
-                description=li.description,
-                quantity=li.quantity,
-                rate=li.rate,
-                amount=li.amount,
-            ))
-
     try:
         qbo_inv = qbo.create_invoice(access_token, realm_id, payload)
         inv_id = str(qbo_inv.get("Id", ""))
         inv_number: str | None = qbo_inv.get("DocNumber")
 
-        if gen_inv is not None:
-            gen_inv.quickbooks_invoice_id = inv_id
-            gen_inv.invoice_number = inv_number
-            db.commit()  # Commit QBO ID immediately so any concurrent webhook sees this record
+        # Only persist locally once QBO confirms with an invoice number
+        if invoice_upload_id is not None and inv_number:
+            gen_inv = GeneratedInvoice(
+                invoice_upload_id=invoice_upload_id,
+                customer_id=customer.id,
+                center_group_name=label,
+                total_amount=total_amount,
+                send_status="pending",
+                quickbooks_invoice_id=inv_id,
+                invoice_number=inv_number,
+            )
+            db.add(gen_inv)
+            db.flush()
 
-        if gen_inv is not None:
-            gen_inv.send_status = "pending"
+            for name in center_names:
+                ctr = center_by_name.get(name.lower())
+                db.add(GeneratedInvoiceCenter(
+                    generated_invoice_id=gen_inv.id,
+                    center_id=ctr.id if ctr else None,
+                    center_name=name,
+                ))
+
+            for li in line_items:
+                db.add(GeneratedInvoiceLineItem(
+                    generated_invoice_id=gen_inv.id,
+                    product_and_service_id=li.product_and_service_id,
+                    product_name=li.product_name,
+                    description=li.description,
+                    quantity=li.quantity,
+                    rate=li.rate,
+                    amount=li.amount,
+                ))
+
+            db.commit()
 
         result.invoices_created += 1
         result.invoice_details.append(
@@ -704,12 +702,10 @@ def _create_and_send(
                 invoice_number=inv_number,
                 sent_at=None,
                 send_status="pending",
+                generated_invoice_id=gen_inv.id if invoice_upload_id and inv_number else None,
             )
         )
     except Exception as err:
-        if gen_inv is not None:
-            gen_inv.send_status = "failed"
-            gen_inv.error_message = str(err)
         result.invoices_failed += 1
         result.errors.append(
             f"Customer '{customer.display_name}' / {label}: failed to create invoice — {err}"

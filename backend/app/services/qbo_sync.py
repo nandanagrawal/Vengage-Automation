@@ -63,6 +63,20 @@ def _sync_items_from_qbo(
         apply_qbo_item_to_model(row, qbo_item)
         db.add(row)
         upserted += 1
+
+        # Ensure each item has the correct tax code set in QBO
+        current_tax = (qbo_item.get("SalesTaxCodeRef") or {}).get("value")
+        if current_tax != settings.QBO_LINE_TAX_CODE and row.sync_token:
+            try:
+                client.update_item(token, realm, {
+                    "sparse": True,
+                    "Id": qid,
+                    "SyncToken": row.sync_token,
+                    "SalesTaxCodeRef": {"value": settings.QBO_LINE_TAX_CODE},
+                })
+            except Exception:
+                pass  # non-fatal — invoice TaxCodeRef still overrides per-line
+
     db.commit()
 
     qdel = db.query(ProductAndService)

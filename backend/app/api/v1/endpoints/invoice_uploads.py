@@ -244,6 +244,20 @@ def get_upload_detail(
     }
 
 
+@router.delete("/generated-invoices/{invoice_id}", status_code=204)
+def delete_generated_invoice(
+    invoice_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Delete a generated invoice record locally. Does NOT touch QuickBooks."""
+    row = db.query(GeneratedInvoice).filter(GeneratedInvoice.id == invoice_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Invoice not found.")
+    db.delete(row)
+    db.commit()
+
+
 # ── New multi-step flow endpoints ─────────────────────────────────────────────
 
 @router.post("/invoice-uploads/validate", response_model=ValidationResponse, status_code=200)

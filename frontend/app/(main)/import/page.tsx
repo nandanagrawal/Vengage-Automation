@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import * as XLSX from "xlsx";
 import {
+  apiDelete,
   apiGenerateInvoices,
   apiGet,
   apiGetLineItemPreview,
@@ -536,6 +537,18 @@ function PreviewStage({
 // ── Stage: Result ─────────────────────────────────────────────────────────────
 
 function ResultStage({ result, onReset }: { result: InvoiceUploadResult; onReset: () => void }) {
+  const [details, setDetails] = useState(result.invoice_details);
+  const [deletingId, setDeletingId] = useState<number | null>(null);
+
+  const onDeleteInvoice = async (generatedInvoiceId: number) => {
+    setDeletingId(generatedInvoiceId);
+    try {
+      await apiDelete(`/generated-invoices/${generatedInvoiceId}`);
+      setDetails((prev) => prev.filter((d) => d.generated_invoice_id !== generatedInvoiceId));
+    } finally {
+      setDeletingId(null);
+    }
+  };
   return (
     <div className="rounded-2xl border border-gray-200 p-6 space-y-5" style={{ background: "var(--bg-card)" }}>
       <div className="flex items-center justify-between">
@@ -555,20 +568,37 @@ function ResultStage({ result, onReset }: { result: InvoiceUploadResult; onReset
           </div>
         ))}
       </div>
-      {result.invoice_details.length > 0 && (
+      {details.length > 0 && (
         <div>
           <h4 className="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-2">Invoices created</h4>
           <div className="rounded-xl border border-gray-200 overflow-hidden">
-            <div className="grid grid-cols-[5rem_minmax(0,2fr)_minmax(0,2fr)_8rem_5rem] px-4 py-2.5 border-b border-gray-200 text-[10px] font-semibold uppercase tracking-wide text-gray-400">
-              <span>Inv #</span><span>Customer</span><span>Group</span><span className="text-right">Delivery Date</span><span className="text-center">Status</span>
+            <div className="grid grid-cols-[5rem_minmax(0,2fr)_minmax(0,2fr)_8rem_5rem_2.5rem] px-4 py-2.5 border-b border-gray-200 text-[10px] font-semibold uppercase tracking-wide text-gray-400">
+              <span>Inv #</span><span>Customer</span><span>Group</span><span className="text-right">Delivery Date</span><span className="text-center">Status</span><span />
             </div>
-            {result.invoice_details.map((d, i) => (
-              <div key={i} className="grid grid-cols-[5rem_minmax(0,2fr)_minmax(0,2fr)_8rem_5rem] px-4 py-2.5 border-b border-gray-100 last:border-0 items-center">
+            {details.map((d, i) => (
+              <div key={i} className="grid grid-cols-[5rem_minmax(0,2fr)_minmax(0,2fr)_8rem_5rem_2.5rem] px-4 py-2.5 border-b border-gray-100 last:border-0 items-center">
                 <span className="text-gray-500 text-xs font-mono truncate">{d.invoice_number ?? "—"}</span>
                 <span className="text-gray-900 text-sm truncate pr-2">{d.customer}</span>
                 <span className="text-gray-500 text-xs truncate pr-2">{d.group}</span>
                 <span className="text-gray-600 text-xs text-right">{d.sent_at ? new Date(d.sent_at).toLocaleDateString("en-AU", { day: "2-digit", month: "short", year: "numeric" }) : "—"}</span>
                 <div className="flex justify-center"><SendStatusDot status={d.send_status} /></div>
+                <div className="flex justify-center">
+                  {d.generated_invoice_id && (
+                    <button
+                      type="button"
+                      title="Delete local record (does not delete from QuickBooks)"
+                      disabled={deletingId === d.generated_invoice_id}
+                      onClick={() => void onDeleteInvoice(d.generated_invoice_id!)}
+                      className="p-1 rounded text-gray-300 hover:text-red-400 hover:bg-red-50 transition-colors disabled:opacity-40"
+                    >
+                      {deletingId === d.generated_invoice_id ? (
+                        <svg className="w-3.5 h-3.5 animate-spin" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9" /></svg>
+                      ) : (
+                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                      )}
+                    </button>
+                  )}
+                </div>
               </div>
             ))}
           </div>
@@ -591,7 +621,60 @@ function ResultStage({ result, onReset }: { result: InvoiceUploadResult; onReset
   );
 }
 
-// ── History tab (unchanged) ───────────────────────────────────────────────────
+// ── History invoice table with delete ────────────────────────────────────────
+
+function HistoryInvoiceTable({ invoices, onDeleted }: { invoices: UploadDetailResponse["generated_invoices"]; onDeleted: (id: number) => void }) {
+  const [deletingId, setDeletingId] = useState<number | null>(null);
+  const onDelete = async (id: number) => {
+    setDeletingId(id);
+    try {
+      await apiDelete(`/generated-invoices/${id}`);
+      onDeleted(id);
+    } finally {
+      setDeletingId(null);
+    }
+  };
+  return (
+    <div>
+      <p className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-2">Invoices Created</p>
+      <div className="rounded-xl border border-gray-200 overflow-hidden">
+        <div className="grid grid-cols-[5rem_minmax(0,2fr)_minmax(0,1.5fr)_8rem_6rem_2.5rem] px-4 py-2.5 border-b border-gray-200 text-[10px] font-semibold uppercase tracking-wide text-gray-400">
+          <span>INV #</span><span>Customer</span><span>Group</span><span className="text-right">Delivery Date</span><span className="text-right">Status</span><span />
+        </div>
+        <div className="divide-y divide-gray-100">
+          {invoices.map((inv) => (
+            <div key={inv.id} className="grid grid-cols-[5rem_minmax(0,2fr)_minmax(0,1.5fr)_8rem_6rem_2.5rem] px-4 py-2.5 items-center">
+              <span className="text-gray-600 text-xs font-mono">{inv.invoice_number ?? "—"}</span>
+              <span className="text-gray-900 text-sm truncate pr-3">{inv.customer_name ?? "—"}</span>
+              <span className="text-gray-400 text-xs truncate pr-3">{inv.center_group_name}</span>
+              <span className="text-gray-600 text-xs text-right">
+                {inv.sent_at ? new Date(inv.sent_at).toLocaleDateString("en-AU", { day: "2-digit", month: "short", year: "numeric" }) : "—"}
+              </span>
+              <div className="flex justify-end"><SendStatusDot status={inv.send_status} /></div>
+              <div className="flex justify-center">
+                <button
+                  type="button"
+                  title="Delete local record (does not delete from QuickBooks)"
+                  disabled={deletingId === inv.id}
+                  onClick={() => void onDelete(inv.id)}
+                  className="p-1 rounded text-gray-300 hover:text-red-400 hover:bg-red-50 transition-colors disabled:opacity-40"
+                >
+                  {deletingId === inv.id ? (
+                    <svg className="w-3.5 h-3.5 animate-spin" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9" /></svg>
+                  ) : (
+                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                  )}
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── History tab ───────────────────────────────────────────────────────────────
 
 function HistoryDetailModal({ uploadId, onClose }: { uploadId: number; onClose: () => void }) {
   const [data, setData] = useState<UploadDetailResponse | null>(null);
@@ -646,29 +729,9 @@ function HistoryDetailModal({ uploadId, onClose }: { uploadId: number; onClose: 
 
               {/* Invoice table */}
               {data.generated_invoices.length > 0 && (
-                <div>
-                  <p className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-2">Invoices Created</p>
-                  <div className="rounded-xl border border-gray-200 overflow-hidden">
-                    <div className="grid grid-cols-[5rem_minmax(0,2fr)_minmax(0,1.5fr)_8rem_6rem] px-4 py-2.5 border-b border-gray-200 text-[10px] font-semibold uppercase tracking-wide text-gray-400">
-                      <span>INV #</span><span>Customer</span><span>Group</span><span className="text-right">Delivery Date</span><span className="text-right">Status</span>
-                    </div>
-                    <div className="divide-y divide-gray-100">
-                      {data.generated_invoices.map((inv) => (
-                        <div key={inv.id} className="grid grid-cols-[5rem_minmax(0,2fr)_minmax(0,1.5fr)_8rem_6rem] px-4 py-2.5 items-center">
-                          <span className="text-gray-600 text-xs font-mono">{inv.invoice_number ?? "—"}</span>
-                          <span className="text-gray-900 text-sm truncate pr-3">{inv.customer_name ?? "—"}</span>
-                          <span className="text-gray-400 text-xs truncate pr-3">{inv.center_group_name}</span>
-                          <span className="text-gray-600 text-xs text-right">
-                            {inv.sent_at ? new Date(inv.sent_at).toLocaleDateString("en-AU", { day: "2-digit", month: "short", year: "numeric" }) : "—"}
-                          </span>
-                          <div className="flex justify-end">
-                            <SendStatusDot status={inv.send_status} />
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </div>
+                <HistoryInvoiceTable invoices={data.generated_invoices} onDeleted={(id) => {
+                  setData((prev) => prev ? { ...prev, generated_invoices: prev.generated_invoices.filter((i) => i.id !== id) } : prev);
+                }} />
               )}
             </>
           )}

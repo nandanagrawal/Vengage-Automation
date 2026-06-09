@@ -284,8 +284,9 @@ def parse_spreadsheet(filename: str, content: bytes) -> ParsedFile:
 
 def _invoice_date() -> date:
     today = date.today()
-    last_day = calendar.monthrange(today.year, today.month)[1]
-    return date(today.year, today.month, last_day)
+    first_of_current = today.replace(day=1)
+    last_month_last_day = first_of_current - timedelta(days=1)
+    return last_month_last_day
 
 
 def _due_date(inv_date: date) -> date:
@@ -293,7 +294,13 @@ def _due_date(inv_date: date) -> date:
 
 
 def _memo(inv_date: date) -> str:
-    return inv_date.strftime("%b%y").upper() + " Invoice"
+    month = inv_date.strftime("%B")
+    year = inv_date.strftime("%Y")
+    return (
+        f"Thank you for your business and for being our valuable customer. "
+        f"Please find the details for the {month}, {year} month bookings.\n\n"
+        f"Hope you have a great day ahead."
+    )
 
 
 def _month_label(inv_date: date) -> str:
@@ -607,17 +614,16 @@ def generate_invoices_from_parsed(
             group_center_names = [center_by_name[n].name for n in group_name_lowers]
 
             if group_key is None:
-                for standalone_name in group_name_lowers:
-                    ctr_name = center_by_name[standalone_name].name
-                    _create_and_send(
-                        db=db, qbo=qbo, access_token=access_token, realm_id=realm_id,
-                        customer=customer, center_names=[ctr_name],
-                        center_by_name=center_by_name, parsed=parsed,
-                        customer_services=active_services, inv_date=inv_date,
-                        result=result, is_standalone=True,
-                        invoice_upload_id=invoice_upload_id,
-                        tax_code_id=tax_code_id,
-                    )
+                standalone_names = [center_by_name[n].name for n in group_name_lowers]
+                _create_and_send(
+                    db=db, qbo=qbo, access_token=access_token, realm_id=realm_id,
+                    customer=customer, center_names=standalone_names,
+                    center_by_name=center_by_name, parsed=parsed,
+                    customer_services=active_services, inv_date=inv_date,
+                    result=result, is_standalone=True,
+                    invoice_upload_id=invoice_upload_id,
+                    tax_code_id=tax_code_id,
+                )
             else:
                 _create_and_send(
                     db=db, qbo=qbo, access_token=access_token, realm_id=realm_id,
@@ -667,11 +673,10 @@ def _create_and_send(
     invoice_upload_id: int | None = None,
     tax_code_id: str = "",
 ) -> None:
-    label = (
-        f"{center_names[0]} (standalone)"
-        if is_standalone
-        else " + ".join(center_names)
-    )
+    if is_standalone and len(center_names) == 1:
+        label = f"{center_names[0]} (standalone)"
+    else:
+        label = " + ".join(center_names)
     built = _build_qbo_invoice_payload(
         customer=customer,
         center_names=center_names,

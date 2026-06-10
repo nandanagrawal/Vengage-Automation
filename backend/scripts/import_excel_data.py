@@ -46,26 +46,114 @@ INVOICE_DATA_HEADER_ROW_INDEX = 12  # 0-based; row 13 in Excel is the column hea
 
 # ── Matching helpers ───────────────────────────────────────────────────────────
 
+_PAREN_SUFFIX = re.compile(r"\s*\(.*?\)\s*$")
+
+
 def _match_customer_exact(customers: list, name: str):
+    """
+    Match by exact display_name, then retry after stripping trailing
+    parenthetical codes from the DB name (e.g. 'The Radiology Centre (TRC)'
+    matches sheet name 'The Radiology Centre').
+    """
     name_l = name.strip().lower()
+    fallback = []
     for c in customers:
-        if c.display_name.strip().lower() == name_l:
+        dn = c.display_name.strip()
+        if dn.lower() == name_l:
             return c
-    return None
+        stripped = _PAREN_SUFFIX.sub("", dn).strip().lower()
+        if stripped == name_l:
+            fallback.append(c)
+    return fallback[0] if fallback else None
 
 
 def _match_customer_by_prefix(customers: list, prefix: str):
     """
     Return the first customer whose display_name contains the prefix as a discrete token.
-    Splits only on whitespace and bracket/punctuation chars so that hyphenated
-    codes like SM-TGC are kept as a single token.
+
+    Builds two token sets and checks both:
+    - Without hyphen splitting: keeps SM-TGC as one token so 'SM-TGC' matches
+    - With hyphen splitting:    breaks CDI-Castle into CDI + Castle so 'CDI' matches
+
+    Also checks each hyphen-segment of the prefix itself (e.g. 'SCMI' from 'SCMI-BA')
+    so that customer '(SCMI) Southern Cross Medical Imaging' matches prefix 'SCMI-BA'.
     """
     prefix_up = prefix.strip().upper()
+    candidates = {prefix_up} | set(prefix_up.split("-"))
+
     for c in customers:
         tokens = {t.upper() for t in re.split(r"[\s\(\)\&\,\/\+\.]+", c.display_name) if t.strip()}
-        if prefix_up in tokens:
+        tokens |= {t.upper() for t in re.split(r"[\s\(\)\&\,\/\+\.\-]+", c.display_name) if t.strip()}
+        if candidates & tokens:
             return c
     return None
+
+
+_LEGAL_SUFFIXES = re.compile(
+    r"\s*(pty\.?\s*ltd\.?|ltd\.?|pty\.?|inc\.?|llc\.?|co\.?)$",
+    re.IGNORECASE,
+)
+
+
+def _strip_legal_suffix(name: str) -> str:
+    return _LEGAL_SUFFIXES.sub("", name).strip(" ,.-")
+
+
+_GENERIC_WORDS = {"medical", "imaging", "radiology", "diagnostics", "diagnostic",
+                  "health", "centre", "center", "clinic", "services", "all", "and"}
+
+
+def _match_customer_by_center_name(customers: list, center_name: str):
+    """
+    Fallback: find a customer whose display_name matches the center's full name.
+
+    Strategy 1 — customer name in center name:
+      Tries full customer name and each segment split by ' - ' / ','
+      (e.g. 'Wollongong Diagnostics' from 'ALL CENTERS - Wollongong Diagnostics').
+      Requires at least 2 words per segment.
+
+    Strategy 2 — brand word from center name in customer name:
+      Takes the first significant word of the center name (≥5 chars, not generic)
+      and checks if it appears as a token in the customer display_name.
+      (e.g. 'CareScan' from 'CareScan Edmondson Park' → 'CareScan Medical Imaging').
+
+    Returns the longest-matching customer display_name.
+    """
+    center_name_l = center_name.strip().lower()
+    matches = []
+
+    # Strategy 1: customer name (or segment) as substring of center name
+    for c in customers:
+        dn_full = _strip_legal_suffix(c.display_name.strip())
+        segments = [dn_full] + [
+            s.strip() for s in re.split(r"\s*[-,]\s*", dn_full) if s.strip()
+        ]
+        for seg in segments:
+            if len(seg.split()) < 2:
+                continue
+            if seg.lower() in center_name_l:
+                matches.append(c)
+                break
+
+    if matches:
+        return max(matches, key=lambda c: len(c.display_name))
+
+    # Strategy 2: first significant word of center name in customer display_name
+    center_words = re.split(r"[\s\(\)\&\,\/\+\.\-]+", center_name)
+    brand_word = next(
+        (w for w in center_words if len(w) >= 5 and w.lower() not in _GENERIC_WORDS),
+        None,
+    )
+    if brand_word:
+        brand_up = brand_word.upper()
+        for c in customers:
+            tokens = {t.upper() for t in re.split(r"[\s\(\)\&\,\/\+\.\-]+", c.display_name) if t.strip()}
+            if brand_up in tokens:
+                matches.append(c)
+
+    if not matches:
+        return None
+    return max(matches, key=lambda c: len(c.display_name))
 
 
 def _match_product_exact(products: list, name: str):
@@ -78,17 +166,18 @@ def _match_product_exact(products: list, name: str):
 
 # ── Sheet parsers ──────────────────────────────────────────────────────────────
 
-def _parse_raw_sheet(ws) -> list[tuple[str, list[str]]]:
-    """Returns list of (center_code, [prefix1, prefix2, ...])."""
+def _parse_raw_sheet(ws) -> list[tuple[str, str, list[str]]]:
+    """Returns list of (center_code, center_name, [prefix1, prefix2, ...])."""
     result = []
     for row in ws.iter_rows(min_row=2, values_only=True):
         if not row[0]:
             continue
         center_code = str(row[0]).strip()
+        center_name = str(row[1]).strip() if row[1] else ""
         raw_prefix = str(row[2]).strip() if row[2] else ""
         prefixes = [p.strip() for p in raw_prefix.split(",") if p.strip()]
         if center_code:
-            result.append((center_code, prefixes))
+            result.append((center_code, center_name, prefixes))
     return result
 
 
@@ -158,7 +247,7 @@ def _run_validate(excel_path: Path) -> None:
         unmatched_centers: list[tuple[str, str]] = []
         already_exist_centers: list[str] = []
 
-        for center_code, prefixes in raw_centers:
+        for center_code, center_name, prefixes in raw_centers:
             if center_code in existing_centers:
                 already_exist_centers.append(center_code)
                 continue
@@ -167,6 +256,8 @@ def _run_validate(excel_path: Path) -> None:
                 matched_customer = _match_customer_by_prefix(db_customers, prefix)
                 if matched_customer:
                     break
+            if not matched_customer and center_name:
+                matched_customer = _match_customer_by_center_name(db_customers, center_name)
             if matched_customer:
                 matched_centers.append((center_code, matched_customer.display_name))
             else:
@@ -176,6 +267,11 @@ def _run_validate(excel_path: Path) -> None:
         print(f"  Will be created : {len(matched_centers)}")
         print(f"  Already in DB   : {len(already_exist_centers)}")
         print(f"  No match found  : {len(unmatched_centers)}")
+
+        if already_exist_centers:
+            print("\n  ALREADY IN DB:")
+            for code in already_exist_centers:
+                print(f"    {code}")
 
         if matched_centers:
             print("\n  WILL CREATE:")
@@ -323,12 +419,14 @@ def _run_import(excel_path: Path) -> None:
         print("\n── Step 2: Center codes → Customers ──")
         centers_created = centers_skipped = 0
 
-        for center_code, prefixes in raw_centers:
+        for center_code, center_name, prefixes in raw_centers:
             matched_customer = None
             for prefix in prefixes:
                 matched_customer = _match_customer_by_prefix(db_customers, prefix)
                 if matched_customer:
                     break
+            if not matched_customer and center_name:
+                matched_customer = _match_customer_by_center_name(db_customers, center_name)
 
             if not matched_customer:
                 errors.append({

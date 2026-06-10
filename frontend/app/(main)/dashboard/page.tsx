@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { apiGet, type DashboardStats, type RecentInvoiceRow } from "@/lib/api";
 
 function initials(name: string | null): string {
@@ -23,6 +23,16 @@ function invoiceStatusBadge(status: string) {
   return <span className="badge badge-primary"><span className="badge-dot badge-dot-primary" />Created</span>;
 }
 
+function pgBtn(disabled: boolean, active = false): React.CSSProperties {
+  return {
+    minWidth: 28, height: 28, padding: "0 6px", fontSize: 12, fontWeight: active ? 700 : 400,
+    borderRadius: 6, border: "1px solid var(--border)", cursor: disabled ? "default" : "pointer",
+    background: active ? "var(--primary)" : "var(--surface-2)",
+    color: active ? "#fff" : disabled ? "var(--text-4)" : "var(--text-2)",
+    opacity: disabled ? 0.4 : 1,
+  };
+}
+
 function Spinner() {
   return (
     <svg className="spinner" width="16" height="16" fill="none" stroke="var(--primary)" strokeWidth={2} viewBox="0 0 24 24">
@@ -36,6 +46,9 @@ export default function DashboardPage() {
   const [statsLoading, setStatsLoading] = useState(true);
   const [invoices, setInvoices] = useState<RecentInvoiceRow[]>([]);
   const [invoicesLoading, setInvoicesLoading] = useState(true);
+  const [search, setSearch] = useState("");
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
 
   useEffect(() => {
     let cancelled = false;
@@ -59,6 +72,22 @@ export default function DashboardPage() {
     return () => { cancelled = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const filtered = useMemo(() => {
+    const q = search.toLowerCase().trim();
+    if (!q) return invoices;
+    return invoices.filter((r) =>
+      (r.invoice_number ?? "").toLowerCase().includes(q) ||
+      (r.customer_name ?? "").toLowerCase().includes(q) ||
+      r.group.toLowerCase().includes(q) ||
+      (r.file_name ?? "").toLowerCase().includes(q),
+    );
+  }, [invoices, search]);
+
+  useEffect(() => { setPage(1); }, [search, pageSize]);
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const paginated = filtered.slice((page - 1) * pageSize, page * pageSize);
 
   const statCards = [
     {
@@ -141,14 +170,34 @@ export default function DashboardPage() {
 
       {/* Recent Invoices table */}
       <div className="card anim-fade-up" style={{ overflow: "hidden", animationDelay: "0.25s" }}>
-        <div className="section-header">
+        <div className="section-header" style={{ flexWrap: "wrap", gap: 12 }}>
           <div>
             <div className="section-title">Invoices Created</div>
             <div style={{ fontSize: 11, color: "var(--text-3)", marginTop: 1 }}>Last 50 · newest first</div>
           </div>
-          {!invoicesLoading && (
-            <span className="badge badge-neutral">{invoices.length} records</span>
-          )}
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            {/* Search */}
+            <div style={{ position: "relative" }}>
+              <svg style={{ position: "absolute", left: 9, top: "50%", transform: "translateY(-50%)", pointerEvents: "none" }} width="13" height="13" fill="none" stroke="var(--text-4)" strokeWidth={2} viewBox="0 0 24 24">
+                <circle cx="11" cy="11" r="8" /><path strokeLinecap="round" d="M21 21l-4.35-4.35" />
+              </svg>
+              <input
+                type="text"
+                placeholder="Search invoices…"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                style={{ paddingLeft: 28, paddingRight: search ? 28 : 10, paddingTop: 6, paddingBottom: 6, fontSize: 12, borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg-input, var(--surface-2))", color: "var(--text-1)", width: 180, outline: "none" }}
+              />
+              {search && (
+                <button onClick={() => setSearch("")} style={{ position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", color: "var(--text-4)", fontSize: 12, padding: 0 }}>✕</button>
+              )}
+            </div>
+            {!invoicesLoading && (
+              <span className="badge badge-neutral">
+                {search ? `${filtered.length} / ${invoices.length}` : `${invoices.length}`} records
+              </span>
+            )}
+          </div>
         </div>
 
         {/* Header row */}
@@ -171,9 +220,14 @@ export default function DashboardPage() {
             No invoices yet — upload a file in Import to generate invoices.
           </div>
         )}
+        {!invoicesLoading && invoices.length > 0 && filtered.length === 0 && (
+          <div style={{ padding: "40px 20px", textAlign: "center", color: "var(--text-3)", fontSize: 14 }}>
+            No invoices match &ldquo;{search}&rdquo;
+          </div>
+        )}
 
         {/* Rows */}
-        {!invoicesLoading && invoices.map((row, i) => (
+        {!invoicesLoading && paginated.map((row, i) => (
           <div
             key={row.id}
             className="table-row"
@@ -210,11 +264,42 @@ export default function DashboardPage() {
           </div>
         ))}
 
-        {!invoicesLoading && invoices.length > 0 && (
-          <div className="table-footer">
-            <span style={{ fontSize: 12, color: "var(--text-3)" }}>
-              {invoices.length} invoice{invoices.length !== 1 ? "s" : ""} shown
-            </span>
+        {!invoicesLoading && filtered.length > 0 && (
+          <div className="table-footer" style={{ flexWrap: "wrap", gap: 8 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ fontSize: 12, color: "var(--text-3)" }}>
+                {(page - 1) * pageSize + 1}–{Math.min(page * pageSize, filtered.length)} of {filtered.length}
+              </span>
+              <select
+                value={pageSize}
+                onChange={(e) => setPageSize(Number(e.target.value))}
+                style={{ fontSize: 11, color: "var(--text-3)", background: "var(--surface-2)", border: "1px solid var(--border)", borderRadius: 6, padding: "2px 6px", cursor: "pointer" }}
+              >
+                {[10, 25, 50].map((s) => <option key={s} value={s}>{s} / page</option>)}
+              </select>
+            </div>
+            {totalPages > 1 && (
+              <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
+                <button onClick={() => setPage(1)} disabled={page === 1} style={pgBtn(page === 1)}>«</button>
+                <button onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page === 1} style={pgBtn(page === 1)}>‹</button>
+                {Array.from({ length: totalPages }, (_, i) => i + 1)
+                  .filter((p) => p === 1 || p === totalPages || Math.abs(p - page) <= 1)
+                  .reduce<(number | "…")[]>((acc, p, idx, arr) => {
+                    if (idx > 0 && typeof arr[idx - 1] === "number" && (p as number) - (arr[idx - 1] as number) > 1) acc.push("…");
+                    acc.push(p);
+                    return acc;
+                  }, [])
+                  .map((p, idx) =>
+                    p === "…" ? (
+                      <span key={`e-${idx}`} style={{ padding: "0 4px", fontSize: 11, color: "var(--text-4)" }}>…</span>
+                    ) : (
+                      <button key={p} onClick={() => setPage(p as number)} style={pgBtn(false, page === p)}>{p}</button>
+                    )
+                  )}
+                <button onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={page === totalPages} style={pgBtn(page === totalPages)}>›</button>
+                <button onClick={() => setPage(totalPages)} disabled={page === totalPages} style={pgBtn(page === totalPages)}>»</button>
+              </div>
+            )}
           </div>
         )}
       </div>

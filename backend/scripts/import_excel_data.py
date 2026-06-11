@@ -67,6 +67,11 @@ def _match_customer_exact(customers: list, name: str):
     return fallback[0] if fallback else None
 
 
+# Generic suffix/connector tokens that appear in prefix codes but carry no customer identity.
+# Blocking them prevents false matches against customers whose names happen to contain these words.
+_GENERIC_PREFIX_TOKENS = frozenset({"ALL", "REG", "DUMMY"})
+
+
 def _match_customer_by_prefix(customers: list, prefix: str):
     """
     Return the first customer whose display_name contains the prefix as a discrete token.
@@ -77,9 +82,16 @@ def _match_customer_by_prefix(customers: list, prefix: str):
 
     Also checks each hyphen-segment of the prefix itself (e.g. 'SCMI' from 'SCMI-BA')
     so that customer '(SCMI) Southern Cross Medical Imaging' matches prefix 'SCMI-BA'.
+
+    Single-character and generic connector segments (ALL, REG, DUMMY) are excluded from
+    split candidates to prevent false matches on unrelated customers.
     """
     prefix_up = prefix.strip().upper()
-    candidates = {prefix_up} | set(prefix_up.split("-"))
+    split_candidates = {
+        p for p in prefix_up.split("-")
+        if len(p) > 1 and p not in _GENERIC_PREFIX_TOKENS
+    }
+    candidates = {prefix_up} | split_candidates
 
     for c in customers:
         tokens = {t.upper() for t in re.split(r"[\s\(\)\&\,\/\+\.]+", c.display_name) if t.strip()}
@@ -102,6 +114,45 @@ def _strip_legal_suffix(name: str) -> str:
 _GENERIC_WORDS = {"medical", "imaging", "radiology", "diagnostics", "diagnostic",
                   "health", "centre", "center", "clinic", "services", "all", "and"}
 
+# Manual overrides: center_code → customer display_name (or None to skip the center entirely).
+# These take full priority over automatic prefix/name matching.
+_MANUAL_CENTER_OVERRIDES: dict[str, str | None] = {
+    "VNG-IMG-9":    "Mi Scan Radiology",
+    "VNG-IMG-7-A":  "Carewell Diagnostix",
+    "VNG-IMG-7-B":  "Carewell Diagnostix",
+    "VNG-IMG-36-A": "DNA Solutions Australia pty ltd (Scanaptics)",
+    "VNG-IMG-6-H":  "Synergy Radiology Pty. Ltd.",
+    "VNG-IMG-21":   None,
+    "VNG-IMG-38":   None,
+    "VNG-IMG-37-A": "PINNACLE MEDICAL IMAGING - North Cote",
+    "VNG-IMG-54-T": "Vision Radiology",
+    "VNG-IMG-42":   "Southwest Radiology",
+    "VNG-IMG-44":   "Strategic Care Pty Ltd.",
+    "VNG-IMG-36-B": None,
+    "VNG-IMG-43-B": "QSCAN Radiology Clinics",
+    "VNG-IMG-48":   None,
+    "VNG-IMG-53":   "Strategic Care Pty Ltd.",
+    "VNG-IMG-56":   "Strategic Care Pty Ltd.",
+}
+
+
+def _find_override_customer(customers: list, name: str):
+    """Flexible customer lookup for manual overrides.
+
+    Tries exact match first, then normalizes by stripping legal suffixes and
+    trailing parentheticals from both the lookup name and each DB display_name.
+    This handles minor formatting differences like 'Pty. Ltd' vs 'Pty. Ltd.'.
+    """
+    c = _match_customer_exact(customers, name)
+    if c:
+        return c
+    name_norm = _strip_legal_suffix(_PAREN_SUFFIX.sub("", name).strip()).lower()
+    for c in customers:
+        db_norm = _strip_legal_suffix(_PAREN_SUFFIX.sub("", c.display_name.strip()).strip()).lower()
+        if db_norm == name_norm:
+            return c
+    return None
+
 
 def _match_customer_by_center_name(customers: list, center_name: str):
     """
@@ -111,18 +162,19 @@ def _match_customer_by_center_name(customers: list, center_name: str):
       Tries full customer name and each segment split by ' - ' / ','
       (e.g. 'Wollongong Diagnostics' from 'ALL CENTERS - Wollongong Diagnostics').
       Requires at least 2 words per segment.
+      Winner = customer whose matched segment is longest (most specific match).
 
     Strategy 2 — brand word from center name in customer name:
       Takes the first significant word of the center name (≥5 chars, not generic)
       and checks if it appears as a token in the customer display_name.
       (e.g. 'CareScan' from 'CareScan Edmondson Park' → 'CareScan Medical Imaging').
-
-    Returns the longest-matching customer display_name.
     """
     center_name_l = center_name.strip().lower()
-    matches = []
 
-    # Strategy 1: customer name (or segment) as substring of center name
+    # Strategy 1: track (customer, matched_segment_length) to prefer the most specific hit.
+    # Example: "Synergy Radiology" (16 chars) beats "Rouse Hill" (9 chars), so Synergy wins
+    # over a customer that only matches via a short geographic suffix.
+    seg_matches: list[tuple] = []
     for c in customers:
         dn_full = _strip_legal_suffix(c.display_name.strip())
         segments = [dn_full] + [
@@ -132,13 +184,14 @@ def _match_customer_by_center_name(customers: list, center_name: str):
             if len(seg.split()) < 2:
                 continue
             if seg.lower() in center_name_l:
-                matches.append(c)
+                seg_matches.append((c, len(seg)))
                 break
 
-    if matches:
-        return max(matches, key=lambda c: len(c.display_name))
+    if seg_matches:
+        return max(seg_matches, key=lambda x: (x[1], len(x[0].display_name)))[0]
 
     # Strategy 2: first significant word of center name in customer display_name
+    matches = []
     center_words = re.split(r"[\s\(\)\&\,\/\+\.\-]+", center_name)
     brand_word = next(
         (w for w in center_words if len(w) >= 5 and w.lower() not in _GENERIC_WORDS),
@@ -246,18 +299,26 @@ def _run_validate(excel_path: Path) -> None:
         matched_centers: list[tuple[str, str]] = []
         unmatched_centers: list[tuple[str, str]] = []
         already_exist_centers: list[str] = []
+        skipped_centers: list[str] = []
 
         for center_code, center_name, prefixes in raw_centers:
             if center_code in existing_centers:
                 already_exist_centers.append(center_code)
                 continue
-            matched_customer = None
-            for prefix in prefixes:
-                matched_customer = _match_customer_by_prefix(db_customers, prefix)
-                if matched_customer:
-                    break
-            if not matched_customer and center_name:
-                matched_customer = _match_customer_by_center_name(db_customers, center_name)
+            if center_code in _MANUAL_CENTER_OVERRIDES:
+                override_name = _MANUAL_CENTER_OVERRIDES[center_code]
+                if override_name is None:
+                    skipped_centers.append(center_code)
+                    continue
+                matched_customer = _find_override_customer(db_customers, override_name)
+            else:
+                matched_customer = None
+                for prefix in prefixes:
+                    matched_customer = _match_customer_by_prefix(db_customers, prefix)
+                    if matched_customer:
+                        break
+                if not matched_customer and center_name:
+                    matched_customer = _match_customer_by_center_name(db_customers, center_name)
             if matched_customer:
                 matched_centers.append((center_code, matched_customer.display_name))
             else:
@@ -266,11 +327,17 @@ def _run_validate(excel_path: Path) -> None:
         print("── Centers (RAW Data-Imaging) ──────────────────────────────────────")
         print(f"  Will be created : {len(matched_centers)}")
         print(f"  Already in DB   : {len(already_exist_centers)}")
+        print(f"  Skipped (manual): {len(skipped_centers)}")
         print(f"  No match found  : {len(unmatched_centers)}")
 
         if already_exist_centers:
             print("\n  ALREADY IN DB:")
             for code in already_exist_centers:
+                print(f"    {code}")
+
+        if skipped_centers:
+            print("\n  SKIPPED (manual override — no DB record intended):")
+            for code in skipped_centers:
                 print(f"    {code}")
 
         if matched_centers:
@@ -420,13 +487,30 @@ def _run_import(excel_path: Path) -> None:
         centers_created = centers_skipped = 0
 
         for center_code, center_name, prefixes in raw_centers:
-            matched_customer = None
-            for prefix in prefixes:
-                matched_customer = _match_customer_by_prefix(db_customers, prefix)
-                if matched_customer:
-                    break
-            if not matched_customer and center_name:
-                matched_customer = _match_customer_by_center_name(db_customers, center_name)
+            if center_code in _MANUAL_CENTER_OVERRIDES:
+                override_name = _MANUAL_CENTER_OVERRIDES[center_code]
+                if override_name is None:
+                    print(f"  {center_code:20s}   [skipped — manual override]")
+                    continue
+                matched_customer = _find_override_customer(db_customers, override_name)
+                if not matched_customer:
+                    errors.append({
+                        "sheet": RAW_SHEET,
+                        "type": "center_override_customer_not_found",
+                        "customer": override_name,
+                        "product": "",
+                        "rate": "",
+                        "reason": f"Center '{center_code}' — manual override customer '{override_name}' not found in DB",
+                    })
+                    continue
+            else:
+                matched_customer = None
+                for prefix in prefixes:
+                    matched_customer = _match_customer_by_prefix(db_customers, prefix)
+                    if matched_customer:
+                        break
+                if not matched_customer and center_name:
+                    matched_customer = _match_customer_by_center_name(db_customers, center_name)
 
             if not matched_customer:
                 errors.append({

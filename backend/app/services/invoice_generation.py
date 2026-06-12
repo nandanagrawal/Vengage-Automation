@@ -46,6 +46,7 @@ from __future__ import annotations
 import calendar
 import csv
 import io
+import re
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation
@@ -120,10 +121,6 @@ PRODUCT_COLUMN_MAP: dict[str, list[str]] = {
     "olivia ai - walkin services call handling": ["walkin (7)"],
     "internal e-referral charges": ["total e-referrals (11)"],
     "external e-referral charges": ["e-referral greeting sms count (12)"],
-    # Slab variants all source from Confirmed Appointment
-    "olivia ai bookings for imaging workflow  (slab-1)": ["confirmed appointment (4)"],
-    "olivia ai bookings for imaging workflow  (slab-2)": ["confirmed appointment (4)"],
-    "olivia ai bookings for imaging workflow  (slab-3)": ["confirmed appointment (4)"],
 }
 
 # Products that always have quantity = 1 regardless of file data
@@ -308,6 +305,97 @@ def _month_label(inv_date: date) -> str:
     return inv_date.strftime("%b%y").upper()
 
 
+# ── Slab pricing helpers ──────────────────────────────────────────────────────
+
+# Matches "(Slab-1)", "(Slab-2b)", "(slab_3a)" etc. anywhere in the name.
+_SLAB_SUFFIX_RE = re.compile(r"\s*\(\s*slab[-_]?\s*\d+[a-z]*\s*\)", re.IGNORECASE)
+# Matches trailing service-code tokens like "B0001", "B0002", "B0003".
+_SERVICE_CODE_RE = re.compile(r"\s+b\d{4}\s*$", re.IGNORECASE)
+# Bounded range: "1-1000", "1001-2500" (en-dash or hyphen).
+_RANGE_BOUNDED_RE = re.compile(r"(\d[\d,]*)\s*[-–]\s*(\d[\d,]*)")
+# Unbounded range: "2501+" or "2501 +".
+_RANGE_UNBOUNDED_RE = re.compile(r"(\d[\d,]*)\s*\+")
+
+
+def _get_col_substrings(product_name_lower: str) -> list[str] | None:
+    """Return PRODUCT_COLUMN_MAP column-substrings for a product name.
+
+    Tries four normalizations in order so that products whose names include
+    a slab suffix ("(Slab-1b)") and/or a service-code suffix ("B0001") still
+    resolve to the correct column mapping:
+
+      1. Exact name (no transformation)
+      2. Strip service-code suffix
+      3. Strip slab suffix
+      4. Strip both slab and service-code suffixes
+    """
+    if product_name_lower in PRODUCT_COLUMN_MAP:
+        return PRODUCT_COLUMN_MAP[product_name_lower]
+
+    no_code = _SERVICE_CODE_RE.sub("", product_name_lower).strip()
+    if no_code != product_name_lower and no_code in PRODUCT_COLUMN_MAP:
+        return PRODUCT_COLUMN_MAP[no_code]
+
+    no_slab = _SLAB_SUFFIX_RE.sub("", product_name_lower).strip()
+    if no_slab != product_name_lower and no_slab in PRODUCT_COLUMN_MAP:
+        return PRODUCT_COLUMN_MAP[no_slab]
+
+    no_both = _SERVICE_CODE_RE.sub("", no_slab).strip()
+    if no_both != product_name_lower and no_both in PRODUCT_COLUMN_MAP:
+        return PRODUCT_COLUMN_MAP[no_both]
+
+    return None
+
+
+def _parse_slab_range(description: str | None) -> tuple[int, int | None] | None:
+    """Parse a numeric range from a ProductAndService description.
+
+    Returns ``(start, end)`` for bounded ranges (e.g. "1-1000" → (1, 1000))
+    or ``(start, None)`` for unbounded ranges (e.g. "2501+" → (2501, None)).
+    Returns ``None`` when no recognisable range is found.
+
+    Handles:
+      - "1-1000 bookings slab"
+      - "1001–2500"   (en-dash)
+      - "2501+ bookings"
+      - "2,501+"      (comma-grouped numbers)
+    """
+    if not description:
+        return None
+    m = _RANGE_BOUNDED_RE.search(description)
+    if m:
+        start = int(m.group(1).replace(",", ""))
+        end = int(m.group(2).replace(",", ""))
+        return (start, end)
+    m = _RANGE_UNBOUNDED_RE.search(description)
+    if m:
+        start = int(m.group(1).replace(",", ""))
+        return (start, None)
+    return None
+
+
+def _slab_qty(total: Decimal, start: int, end: int | None) -> Decimal:
+    """Compute appointments falling within slab [start, end].
+
+    The slab covers appointment numbers start through end (inclusive).
+    ``end=None`` means unbounded (covers all appointments from start onward).
+
+    Examples (total=2755):
+      slab (1, 1000)   → 1000
+      slab (1001, 2500) → 1500
+      slab (2501, None) → 255
+
+    Zero is returned when total < start.
+    """
+    t = int(total)
+    below = start - 1          # appointments before this slab
+    if t <= below:
+        return Decimal("0")
+    if end is None:
+        return Decimal(str(t - below))
+    return Decimal(str(min(t, end) - below))
+
+
 # ── Quantity lookup ───────────────────────────────────────────────────────────
 
 def _get_quantity(
@@ -322,7 +410,7 @@ def _get_quantity(
     if product_name_lower in FIXED_QUANTITY_PRODUCTS:
         return Decimal("1")
 
-    col_substrings = PRODUCT_COLUMN_MAP.get(product_name_lower)
+    col_substrings = _get_col_substrings(product_name_lower)
     if col_substrings:
         total = Decimal("0")
         for substr in col_substrings:
@@ -410,25 +498,33 @@ def _build_line_items_for_center(
     month_label: str,
     tax_code_id: str = "",
 ) -> list[_LineItem]:
-    """Build one _LineItem per (customer service) for a single center."""
-    items: list[_LineItem] = []
-    for cs in customer_services:
+    """Build _LineItem objects for one center, supporting slab-based pricing.
+
+    Slab logic
+    ----------
+    When a customer has multiple services that all map to the **same metric
+    column** (e.g. "Confirmed Appointment") AND every one of those services
+    has a parseable numeric range in its ProductAndService.description (e.g.
+    "1-1000", "1001-2500", "2501+"), the total column value is *distributed*
+    across the slabs rather than duplicated:
+
+      total=2755, slabs (1-1000), (1001-2500), (2501+)
+        → slab-1 qty=1000, slab-2 qty=1500, slab-3 qty=255
+
+    If only some services have parseable ranges, or the group has just one
+    service, each service independently receives the full column value.
+
+    Zero-quantity line items are always included (amount=0).
+    """
+    desc_base = f"{center_prefix} - {month_label} Invoice month".strip()
+
+    def _make_item(cs: CustomerProductAndService, qty: Decimal) -> _LineItem:
         ps = cs.product_and_service
         rate = cs.rate
-        if rate is None or rate <= 0:
-            continue
-
-        qty = _get_quantity(ps.name.lower(), center_metrics)
-        if qty is None:
-            continue  # product has no column mapping in this file format
         amount = (qty * rate).quantize(Decimal("0.01"))
-
-        service_code = cs.service_code.code if cs.service_code else ""
-        description = f"{center_prefix} - {month_label} Invoice month {service_code}".strip()
-
         qbo_payload: dict[str, Any] = {
             "DetailType": "SalesItemLineDetail",
-            "Description": description,
+            "Description": desc_base,
             "Amount": float(amount),
             "SalesItemLineDetail": {
                 "ItemRef": {"value": ps.qbo_id},
@@ -437,16 +533,83 @@ def _build_line_items_for_center(
                 "TaxCodeRef": {"value": tax_code_id or settings.QBO_LINE_TAX_CODE},
             },
         }
-        items.append(_LineItem(
+        return _LineItem(
             product_and_service_id=ps.id,
             product_name=ps.name,
             center_prefix=center_prefix,
-            description=description,
+            description=desc_base,
             quantity=qty,
             rate=rate,
             amount=amount,
             qbo_payload=qbo_payload,
-        ))
+        )
+
+    # ── 1. Group services by which metric column they read from ───────────────
+    # key → sorted join of column substrings (or special prefix for fixed/fallback)
+    col_groups: dict[str, list[CustomerProductAndService]] = {}
+
+    for cs in customer_services:
+        ps = cs.product_and_service
+        if cs.rate is None or cs.rate <= 0:
+            continue
+        name_lower = ps.name.lower()
+
+        if name_lower in FIXED_QUANTITY_PRODUCTS:
+            col_groups.setdefault("__fixed__", []).append(cs)
+            continue
+
+        col_subs = _get_col_substrings(name_lower)
+        if col_subs is not None:
+            key = "|".join(sorted(col_subs))
+            col_groups.setdefault(key, []).append(cs)
+        else:
+            # Fallback: col header contains the product name
+            for col_lower in center_metrics:
+                if name_lower in col_lower:
+                    col_groups.setdefault(f"__fb__{name_lower}", []).append(cs)
+                    break
+            # If still no match, product has no column mapping → skipped
+
+    # ── 2. Build line items per group ─────────────────────────────────────────
+    items: list[_LineItem] = []
+
+    for key, group in col_groups.items():
+        # Resolve raw total for this column group
+        if key == "__fixed__":
+            raw_total = Decimal("1")
+        elif key.startswith("__fb__"):
+            pname = key[len("__fb__"):]
+            raw_total = sum(
+                (v for col, v in center_metrics.items() if pname in col),
+                Decimal("0"),
+            )
+        else:
+            col_subs = key.split("|")
+            raw_total = Decimal("0")
+            for substr in col_subs:
+                for col_lower, val in center_metrics.items():
+                    if substr in col_lower:
+                        raw_total += val
+
+        # Check for slab group: ≥2 services that ALL have parseable description ranges
+        if len(group) > 1:
+            slab_pairs = [
+                (cs, _parse_slab_range(cs.product_and_service.description))
+                for cs in group
+            ]
+            if all(r is not None for _, r in slab_pairs):
+                # Full slab mode: sort by range start and distribute total
+                slab_pairs.sort(key=lambda x: x[1][0])  # type: ignore[index]
+                for cs, (start, end) in slab_pairs:  # type: ignore[misc]
+                    qty = _slab_qty(raw_total, start, end)
+                    items.append(_make_item(cs, qty))
+                continue
+            # Partial or no parseable ranges → fall through to full-qty mode
+
+        # Non-slab (or partial ranges): each service gets the full raw total
+        for cs in group:
+            items.append(_make_item(cs, raw_total))
+
     return items
 
 
@@ -552,8 +715,6 @@ def generate_invoices_from_parsed(
         .options(
             selectinload(Customer.customer_services)
             .selectinload(CustomerProductAndService.product_and_service),
-            selectinload(Customer.customer_services)
-            .selectinload(CustomerProductAndService.service_code),
         )
         .all()
     )
@@ -803,8 +964,6 @@ def build_line_item_preview(body: "RevalidateRequest", db: Session) -> dict:
         .options(
             selectinload(Customer.customer_services)
             .selectinload(CustomerProductAndService.product_and_service),
-            selectinload(Customer.customer_services)
-            .selectinload(CustomerProductAndService.service_code),
         )
         .all()
     )

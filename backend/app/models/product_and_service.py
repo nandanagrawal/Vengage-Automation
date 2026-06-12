@@ -52,4 +52,5 @@ class ProductAndService(Base):
     customer_services: Mapped[list["CustomerProductAndService"]] = relationship(
         "CustomerProductAndService",
         back_populates="product_and_service",
+        passive_deletes=True,
     )

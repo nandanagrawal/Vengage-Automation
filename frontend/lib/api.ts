@@ -176,8 +176,8 @@ export type ServiceCodeRow = {
 export type CustomerServiceRow = {
   id: number;
   product_and_service_id: number;
-  service_code_id: number;
   rate: string;
+  description: string | null;
 };
 
 export type ProductAndServiceRow = {
@@ -187,6 +187,7 @@ export type ProductAndServiceRow = {
   sku: string | null;
   item_type: string | null;
   active: boolean;
+  description: string | null;
 };
 
 export type CenterRow = {

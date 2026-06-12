@@ -8,7 +8,6 @@ from app.models.customer import Customer, CustomerStatus
 from app.models.customer_product_and_service import CustomerProductAndService
 from app.models.customer_type import CustomerType
 from app.models.product_and_service import ProductAndService
-from app.models.service_code import ServiceCode
 from app.schemas.customer import CustomerCreate, CustomerServiceInput, CustomerUpdate
 
 
@@ -31,26 +30,15 @@ def _apply_customer_service_links(
         row.customer_services = []
         return
 
-    # Validate all referenced product IDs and service code IDs exist
+    # Validate all referenced product IDs exist
     ps_ids = [s.product_and_service_id for s in services]
-    sc_ids = [s.service_code_id for s in services if s.service_code_id is not None]
-
     ps_rows = {
         ps.id: ps
         for ps in db.query(ProductAndService).filter(ProductAndService.id.in_(ps_ids)).all()
     }
-    sc_rows = {
-        sc.id: sc
-        for sc in db.query(ServiceCode).filter(ServiceCode.id.in_(sc_ids)).all()
-    } if sc_ids else {}
-
     missing_ps = sorted(set(ps_ids) - set(ps_rows))
     if missing_ps:
         raise ValueError(f"Unknown product_and_service_ids: {missing_ps}")
-
-    missing_sc = sorted(set(sc_ids) - set(sc_rows))
-    if missing_sc:
-        raise ValueError(f"Unknown service_code_ids: {missing_sc}")
 
     # Delete existing rows first and flush so the DB releases the unique slots
     # before we insert the replacement rows (avoids UniqueViolation on flush).
@@ -61,7 +49,6 @@ def _apply_customer_service_links(
             CustomerProductAndService(
                 customer_id=row.id,
                 product_and_service_id=svc.product_and_service_id,
-                service_code_id=svc.service_code_id,
                 rate=svc.rate,
             )
         )

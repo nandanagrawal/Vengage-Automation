@@ -31,15 +31,14 @@ class AddressMixin(BaseModel):
 
 class CustomerServiceInput(BaseModel):
     product_and_service_id: int
-    service_code_id: int | None = None
     rate: Decimal = Field(..., gt=0, description="Must be greater than zero")
 
 
 class CustomerServiceResponse(BaseModel):
     id: int
     product_and_service_id: int
-    service_code_id: int | None = None
     rate: Decimal
+    description: str | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -196,8 +195,8 @@ def customer_response_from_row(row: Customer) -> CustomerResponse:
                 CustomerServiceResponse(
                     id=cs.id,
                     product_and_service_id=cs.product_and_service_id,
-                    service_code_id=cs.service_code_id,
                     rate=cs.rate,
+                    description=cs.product_and_service.description if cs.product_and_service else None,
                 )
                 for cs in row.customer_services
             ],

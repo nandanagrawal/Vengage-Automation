@@ -76,8 +76,6 @@ def _run_validation(
         .options(
             selectinload(Customer.customer_services)
             .selectinload(CustomerProductAndService.product_and_service),
-            selectinload(Customer.customer_services)
-            .selectinload(CustomerProductAndService.service_code),
         )
         .all()
     ) if customer_ids else []

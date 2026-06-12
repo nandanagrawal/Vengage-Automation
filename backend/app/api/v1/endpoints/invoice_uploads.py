@@ -1,4 +1,5 @@
 import json
+import re
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile, File
 from sqlalchemy.orm import Session, selectinload
@@ -9,7 +10,6 @@ from app.models.customer_product_and_service import CustomerProductAndService
 from app.models.generated_invoice import GeneratedInvoice
 from app.models.invoice_upload import InvoiceUpload
 from app.models.product_and_service import ProductAndService
-from app.models.service_code import ServiceCode
 from app.models.user import User
 from app.schemas.invoice_validation import (
     GenerateRequest,
@@ -159,18 +159,29 @@ def get_sheet_config(
     )
     last_invoice_no = last_inv[0] if last_inv else None
 
-    mappings = (
-        db.query(ProductAndService.name, ServiceCode.code)
-        .join(CustomerProductAndService, CustomerProductAndService.product_and_service_id == ProductAndService.id)
-        .join(ServiceCode, ServiceCode.id == CustomerProductAndService.service_code_id)
+    _BCODE_RE = re.compile(r'\s+(B\d{4})\s*$', re.IGNORECASE)
+
+    active_products = (
+        db.query(ProductAndService.name)
+        .filter(ProductAndService.active == True)
         .distinct()
-        .order_by(ServiceCode.code, ProductAndService.name)
+        .order_by(ProductAndService.name)
         .all()
     )
+    seen: set[tuple[str, str]] = set()
+    service_code_products = []
+    for (name,) in active_products:
+        m = _BCODE_RE.search(name)
+        if m:
+            code = m.group(1).upper()
+            if (name, code) not in seen:
+                seen.add((name, code))
+                service_code_products.append({"name": name, "code": code})
+    service_code_products.sort(key=lambda x: (x["code"], x["name"]))
 
     return {
         "last_invoice_no": last_invoice_no,
-        "service_code_products": [{"name": m[0], "code": m[1]} for m in mappings],
+        "service_code_products": service_code_products,
     }
 
 

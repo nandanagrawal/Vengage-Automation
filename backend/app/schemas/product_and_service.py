@@ -10,3 +10,4 @@ class ProductAndServiceResponse(BaseModel):
     sku: str | None = None
     item_type: str | None = None
     active: bool = True
+    description: str | None = None

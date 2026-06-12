@@ -22,9 +22,6 @@ class CustomerProductAndService(Base):
     product_and_service_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("product_and_services.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    service_code_id: Mapped[int | None] = mapped_column(
-        Integer, ForeignKey("service_codes.id", ondelete="RESTRICT"), nullable=True, index=True
-    )
     rate: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False)
 
     created_at: Mapped[datetime] = mapped_column(
@@ -37,7 +34,4 @@ class CustomerProductAndService(Base):
     customer: Mapped["Customer"] = relationship("Customer", back_populates="customer_services")
     product_and_service: Mapped["ProductAndService"] = relationship(
         "ProductAndService", back_populates="customer_services"
-    )
-    service_code: Mapped["ServiceCode"] = relationship(
-        "ServiceCode", back_populates="customer_services"
     )

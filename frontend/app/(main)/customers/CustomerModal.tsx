@@ -3,7 +3,7 @@
 import type { FormEvent, ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
-import type { CenterRow, CustomerRow, CustomerTypeRow, ProductAndServiceRow, ServiceCodeRow } from "@/lib/api";
+import type { CenterRow, CustomerRow, CustomerTypeRow, ProductAndServiceRow } from "@/lib/api";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 
 type CenterLine = { key: string; id?: number; name: string };
@@ -19,7 +19,6 @@ function newCenterLine(): CenterLine {
 type ServiceRow = {
   key: string;
   product_and_service_id: number | "";
-  service_code_id: number | "";
   rate: string;
 };
 
@@ -28,7 +27,7 @@ function newServiceRow(): ServiceRow {
     typeof crypto !== "undefined" && "randomUUID" in crypto
       ? crypto.randomUUID()
       : `sr-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-  return { key, product_and_service_id: "", service_code_id: "", rate: "" };
+  return { key, product_and_service_id: "", rate: "" };
 }
 
 export type CustomerFormValues = {
@@ -174,7 +173,7 @@ export function CustomerModal({
   // Service rows
   const [serviceRows, setServiceRows] = useState<ServiceRow[]>([]);
   const [productOptions, setProductOptions] = useState<ProductAndServiceRow[]>([]);
-  const [serviceCodeOptions, setServiceCodeOptions] = useState<ServiceCodeRow[]>([]);
+  const [serviceError, setServiceError] = useState<string | null>(null);
 
   // Customer Types
   const [customerTypeOptions, setCustomerTypeOptions] = useState<CustomerTypeRow[]>([]);
@@ -192,7 +191,6 @@ export function CustomerModal({
         (customer.customer_services ?? []).map((cs) => ({
           key: `cs-${cs.id}`,
           product_and_service_id: cs.product_and_service_id,
-          service_code_id: cs.service_code_id,
           rate: cs.rate,
         })),
       );
@@ -231,9 +229,6 @@ export function CustomerModal({
     void apiGet<ProductAndServiceRow[]>("/product-and-services")
       .then((rows) => { if (!cancelled) setProductOptions(rows); })
       .catch(() => { /* non-fatal */ });
-    void apiGet<ServiceCodeRow[]>("/service-codes")
-      .then((rows) => { if (!cancelled) setServiceCodeOptions(rows); })
-      .catch(() => { /* non-fatal */ });
     void apiGet<CustomerTypeRow[]>("/customer-types")
       .then((rows) => { if (!cancelled) setCustomerTypeOptions(rows); })
       .catch(() => { /* non-fatal */ });
@@ -255,6 +250,7 @@ export function CustomerModal({
 
   const updateServiceRow = (key: string, patch: Partial<ServiceRow>) => {
     setServiceRows((rows) => rows.map((r) => (r.key === key ? { ...r, ...patch } : r)));
+    setServiceError(null);
   };
 
   const removeServiceRow = (key: string) => {
@@ -273,6 +269,7 @@ export function CustomerModal({
     setPendingDeleteIds([]);
     setCentersLoadError(null);
     setServiceRows([]);
+    setServiceError(null);
     setSelectedCustomerTypeIds([]);
     setNewTypeName("");
     setCreateTypeError(null);
@@ -315,11 +312,21 @@ export function CustomerModal({
     };
     const hasShip = Object.values(shipping).some(Boolean);
 
+    // Validate service rows: if a product is selected, rate must be > 0
+    const incompleteService = serviceRows.find(
+      (r) => r.product_and_service_id !== "" && !(parseFloat(r.rate) > 0),
+    );
+    if (incompleteService) {
+      setServiceError("Rate cannot be blank — enter a rate greater than 0 for each selected service.");
+      setOpenExtra(true);
+      return;
+    }
+    setServiceError(null);
+
     const validServices = serviceRows
       .filter((r) => r.product_and_service_id !== "" && parseFloat(r.rate) > 0)
       .map((r) => ({
         product_and_service_id: r.product_and_service_id as number,
-        service_code_id: r.service_code_id !== "" ? r.service_code_id as number : null,
         rate: r.rate,
       }));
 
@@ -378,7 +385,6 @@ export function CustomerModal({
   if (!open) return null;
 
   const activeProducts = productOptions.filter((p) => p.active);
-  const activeServiceCodes = serviceCodeOptions.filter((sc) => sc.status);
 
   return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/30 backdrop-blur-sm animate-fadeInUp">
@@ -587,87 +593,82 @@ export function CustomerModal({
             <div className="mb-5">
               <label className={labelCls()}>Services &amp; rates</label>
               <p className="text-[11px] text-gray-400 mb-2">
-                Select a product/service, set the rate, and pick a service code. Rate must be &gt; 0. Each service can only appear once.
+                Select a product/service and set the rate. Rate must be &gt; 0. Each service can only appear once.
               </p>
 
               {serviceRows.length > 0 && (
                 <div className="rounded-lg border border-gray-200 bg-gray-50 overflow-hidden mb-2">
                   {/* Header */}
-                  <div className="grid grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1.5fr)_2rem] gap-2 px-3 py-2 border-b border-gray-200">
+                  <div className="grid grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,2fr)_2rem] gap-2 px-3 py-2 border-b border-gray-200">
                     <span className="text-[10px] font-semibold uppercase tracking-wider text-gray-400">Service</span>
                     <span className="text-[10px] font-semibold uppercase tracking-wider text-gray-400">Rate</span>
-                    <span className="text-[10px] font-semibold uppercase tracking-wider text-gray-400">Service Code</span>
+                    <span className="text-[10px] font-semibold uppercase tracking-wider text-gray-400">Description</span>
                     <span />
                   </div>
                   <div className="divide-y divide-gray-100">
-                    {serviceRows.map((row) => (
-                      <div key={row.key} className="grid grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1.5fr)_2rem] gap-2 px-3 py-2 items-center">
-                        {/* Product dropdown */}
-                        <select
-                          value={row.product_and_service_id === "" ? "" : String(row.product_and_service_id)}
-                          onChange={(e) => {
-                            const v = e.target.value;
-                            updateServiceRow(row.key, { product_and_service_id: v === "" ? "" : Number(v) });
-                          }}
-                          className="rounded-lg bg-white border border-gray-200 px-2 py-1.5 text-xs text-gray-900 focus:outline-none focus:ring-1 focus:ring-indigo-200 appearance-none"
-                        >
-                          <option value="" style={{ background: "white", color: "var(--text-4)" }}>Select…</option>
-                          {activeProducts.map((p) => {
-                            const isUsedElsewhere = usedProductIds.has(p.id) && row.product_and_service_id !== p.id;
-                            return (
-                              <option
-                                key={p.id}
-                                value={p.id}
-                                disabled={isUsedElsewhere}
-                                style={{ background: "white", color: "var(--text-2)" }}
-                              >
-                                {p.name}
-                              </option>
-                            );
-                          })}
-                        </select>
+                    {serviceRows.map((row) => {
+                      const selectedProduct = productOptions.find((p) => p.id === row.product_and_service_id);
+                      return (
+                        <div key={row.key} className="grid grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,2fr)_2rem] gap-2 px-3 py-2 items-center">
+                          {/* Product dropdown */}
+                          <select
+                            value={row.product_and_service_id === "" ? "" : String(row.product_and_service_id)}
+                            onChange={(e) => {
+                              const v = e.target.value;
+                              updateServiceRow(row.key, { product_and_service_id: v === "" ? "" : Number(v) });
+                            }}
+                            className="rounded-lg bg-white border border-gray-200 px-2 py-1.5 text-xs text-gray-900 focus:outline-none focus:ring-1 focus:ring-indigo-200 appearance-none"
+                          >
+                            <option value="" style={{ background: "white", color: "var(--text-4)" }}>Select…</option>
+                            {activeProducts.map((p) => {
+                              const isUsedElsewhere = usedProductIds.has(p.id) && row.product_and_service_id !== p.id;
+                              return (
+                                <option
+                                  key={p.id}
+                                  value={p.id}
+                                  disabled={isUsedElsewhere}
+                                  style={{ background: "white", color: "var(--text-2)" }}
+                                >
+                                  {p.name}
+                                </option>
+                              );
+                            })}
+                          </select>
 
-                        {/* Rate */}
-                        <input
-                          type="number"
-                          min="0.0001"
-                          step="0.0001"
-                          placeholder="0.00"
-                          value={row.rate}
-                          onChange={(e) => updateServiceRow(row.key, { rate: e.target.value })}
-                          className="rounded-lg bg-white border border-gray-200 px-2 py-1.5 text-xs text-gray-900 focus:outline-none focus:ring-1 focus:ring-indigo-200"
-                        />
+                          {/* Rate */}
+                          <input
+                            type="number"
+                            min="0.0001"
+                            step="0.0001"
+                            placeholder="0.00"
+                            value={row.rate}
+                            onChange={(e) => updateServiceRow(row.key, { rate: e.target.value })}
+                            className="rounded-lg bg-white border border-gray-200 px-2 py-1.5 text-xs text-gray-900 focus:outline-none focus:ring-1 focus:ring-indigo-200"
+                          />
 
-                        {/* Service code dropdown */}
-                        <select
-                          value={row.service_code_id === "" ? "" : String(row.service_code_id)}
-                          onChange={(e) => {
-                            const v = e.target.value;
-                            updateServiceRow(row.key, { service_code_id: v === "" ? "" : Number(v) });
-                          }}
-                          className="rounded-lg bg-white border border-gray-200 px-2 py-1.5 text-xs text-gray-900 focus:outline-none focus:ring-1 focus:ring-indigo-200 appearance-none"
-                        >
-                          <option value="" style={{ background: "white", color: "var(--text-4)" }}>Select…</option>
-                          {activeServiceCodes.map((sc) => (
-                            <option key={sc.id} value={sc.id} style={{ background: "white", color: "var(--text-1)" }}>
-                              {sc.code}
-                            </option>
-                          ))}
-                        </select>
+                          {/* Description (read-only, from product) */}
+                          <span className="text-xs text-gray-500 truncate px-1">
+                            {selectedProduct?.description ?? "—"}
+                          </span>
 
-                        {/* Remove */}
-                        <button
-                          type="button"
-                          onClick={() => removeServiceRow(row.key)}
-                          className="text-gray-400 hover:text-red-600 text-sm transition-colors"
-                          aria-label="Remove service row"
-                        >
-                          ✕
-                        </button>
-                      </div>
-                    ))}
+                          {/* Remove */}
+                          <button
+                            type="button"
+                            onClick={() => removeServiceRow(row.key)}
+                            className="text-gray-400 hover:text-red-600 text-sm transition-colors"
+                            aria-label="Remove service row"
+                          >
+                            ✕
+                          </button>
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
+              )}
+
+              {serviceError && (
+                <p className="text-xs text-red-600 mb-1">{serviceError}</p>
               )}
 
               <button
@@ -680,9 +681,6 @@ export function CustomerModal({
 
               {activeProducts.length === 0 && (
                 <p className="text-[11px] text-amber-700/80 mt-1.5">No active products found — run Sync to pull from QuickBooks.</p>
-              )}
-              {activeServiceCodes.length === 0 && (
-                <p className="text-[11px] text-amber-700/80 mt-1">No active service codes — add them in Configuration → Service Code.</p>
               )}
             </div>
 

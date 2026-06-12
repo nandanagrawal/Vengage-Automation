@@ -369,7 +369,7 @@ function PreviewStage({
     s2.push(["System Last Invoice No", lastInvNo]);
     s2.push(["Invoice Date", invoiceDate]);
     s2.push(["Memo", memo]);
-    s2.push(["Month", memo]);
+    s2.push(["Month", memoLabel]);
     serviceCodeProducts.forEach(p => s2.push([p.name, p.code]));
     s2.push(["Previous Month", prevMonthLabel]);
     s2.push([]); // blank row

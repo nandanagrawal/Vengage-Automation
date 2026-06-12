@@ -230,6 +230,23 @@ class QuickBooksClient:
             result = data.get("QueryResponse", {}).get("TaxCode", []) or []
             return result if isinstance(result, list) else [result]
 
+    def create_item(
+        self,
+        access_token: str,
+        realm_id: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        url = f"{self.base_url()}/v3/company/{realm_id}/item?minorversion={self._minor()}"
+        with httpx.Client(timeout=60.0) as client:
+            res = client.post(url, headers=_headers(access_token), json=payload)
+            if not res.is_success:
+                raise httpx.HTTPStatusError(
+                    f"{res.status_code} from QBO create_item: {res.text}",
+                    request=res.request,
+                    response=res,
+                )
+            return res.json().get("Item", {})
+
     def update_item(
         self,
         access_token: str,

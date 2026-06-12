@@ -122,15 +122,15 @@ _MANUAL_CENTER_OVERRIDES: dict[str, str | None] = {
     "VNG-IMG-7-B":  "Carewell Diagnostix",
     "VNG-IMG-36-A": "DNA Solutions Australia pty ltd (Scanaptics)",
     "VNG-IMG-6-H":  "Synergy Radiology Pty. Ltd.",
-    "VNG-IMG-21":   None,
-    "VNG-IMG-38":   None,
+    "VNG-IMG-21":   "Strategic Care Pty Ltd.",
+    "VNG-IMG-38":   "Strategic Care Pty Ltd.",
     "VNG-IMG-37-A": "PINNACLE MEDICAL IMAGING - North Cote",
     "VNG-IMG-54-T": "Vision Radiology",
     "VNG-IMG-42":   "Southwest Radiology",
     "VNG-IMG-44":   "Strategic Care Pty Ltd.",
-    "VNG-IMG-36-B": None,
+    "VNG-IMG-36-B": "DNA Solutions Australia pty ltd (Scanaptics)",
     "VNG-IMG-43-B": "QSCAN Radiology Clinics",
-    "VNG-IMG-48":   None,
+    "VNG-IMG-48":   "Strategic Care Pty Ltd.",
     "VNG-IMG-53":   "Strategic Care Pty Ltd.",
     "VNG-IMG-56":   "Strategic Care Pty Ltd.",
 }
@@ -217,6 +217,63 @@ def _match_product_exact(products: list, name: str):
     return None
 
 
+_SLAB_WORD_RE = re.compile(r'\bslab\b', re.IGNORECASE)
+_SLAB_SUFFIX_STRIP = re.compile(r'\s*\(\s*slab[-_]?\s*\d+[a-z]*\s*\)\s*', re.IGNORECASE)
+_BCODE_STRIP = re.compile(r'\s+b\d{4}\s*$', re.IGNORECASE)
+_RANGE_BOUNDED = re.compile(r'(\d[\d,]*)\s*[-–]\s*(\d[\d,]*)')
+_RANGE_UNBOUNDED = re.compile(r'(\d[\d,]*)\s*\+')
+
+
+def _extract_range(text: str | None) -> tuple[int, int | None] | None:
+    """Parse the first numeric range from text. Returns (start, end) or (start, None) for open-ended."""
+    if not text:
+        return None
+    m = _RANGE_BOUNDED.search(text)
+    if m:
+        return int(m.group(1).replace(',', '')), int(m.group(2).replace(',', ''))
+    m = _RANGE_UNBOUNDED.search(text)
+    if m:
+        return int(m.group(1).replace(',', '')), None
+    return None
+
+
+def _normalize_base_name(name: str) -> str:
+    """Strip slab suffix and B-code suffix, collapse whitespace, lowercase."""
+    n = _SLAB_SUFFIX_STRIP.sub(' ', name).strip()
+    n = _BCODE_STRIP.sub('', n).strip()
+    return ' '.join(n.lower().split())
+
+
+def _match_product_for_import(products: list, product_name: str, item_description: str | None):
+    """
+    Match a product from the invoice sheet to a DB ProductAndService.
+
+    For slab products (name contains 'slab'):
+      1. Try exact name match first.
+      2. If not found, extract the numeric range from item_description
+         (e.g. "(1-1000 bookings slab)" → (1, 1000)) and find a DB product
+         whose base name matches AND whose description contains the same range.
+
+    For non-slab products: exact name match only.
+    """
+    exact = _match_product_exact(products, product_name)
+    if exact:
+        return exact
+
+    if not _SLAB_WORD_RE.search(product_name):
+        return None
+
+    item_range = _extract_range(item_description)
+    if not item_range:
+        return None
+
+    base = _normalize_base_name(product_name)
+    for p in products:
+        if _normalize_base_name(p.name) == base and _extract_range(p.description) == item_range:
+            return p
+    return None
+
+
 # ── Sheet parsers ──────────────────────────────────────────────────────────────
 
 def _parse_raw_sheet(ws) -> list[tuple[str, str, list[str]]]:
@@ -234,9 +291,10 @@ def _parse_raw_sheet(ws) -> list[tuple[str, str, list[str]]]:
     return result
 
 
-def _parse_invoice_sheet(ws) -> list[tuple[str, str, float]]:
+def _parse_invoice_sheet(ws) -> list[tuple[str, str, float, str | None]]:
     """
-    Returns unique list of (customer_name, product_name, rate).
+    Returns unique list of (customer_name, product_name, rate, item_description).
+    item_description (col 8) is used for slab range matching.
     Handles continuation rows (no customer name = same customer as previous row).
     """
     rows = list(ws.iter_rows(values_only=True))
@@ -250,10 +308,12 @@ def _parse_invoice_sheet(ws) -> list[tuple[str, str, float]]:
         if not current_customer:
             continue
         product = row[7]
+        item_desc = row[8] if len(row) > 8 else None
         rate = row[10]
         if not product or rate is None:
             continue
         product_name = str(product).strip()
+        item_description = str(item_desc).strip() if item_desc else None
         try:
             rate_f = float(rate)
         except (TypeError, ValueError):
@@ -261,7 +321,7 @@ def _parse_invoice_sheet(ws) -> list[tuple[str, str, float]]:
         key = (current_customer, product_name)
         if key not in seen:
             seen.add(key)
-            result.append((current_customer, product_name, rate_f))
+            result.append((current_customer, product_name, rate_f, item_description))
 
     return result
 
@@ -351,41 +411,46 @@ def _run_validate(excel_path: Path) -> None:
                 print(f"    {code:22s}   prefixes: {prefixes}")
 
         # ── Customer-Product-Service preview ───────────────────────────────────
-        cps_will_create: list[tuple[str, str, float]] = []
-        cps_already_exist: list[tuple[str, str]] = []
+        # Per-customer: list of (db_product_name, rate, status)
+        # status: 'new' | 'existing'
+        from collections import defaultdict
+        cps_per_customer: dict[str, list[tuple[str, float, str]]] = defaultdict(list)
+        cps_will_create_count = 0
+        cps_already_exist_count = 0
         cps_no_customer: list[tuple[str, str]] = []
         cps_no_product: list[tuple[str, str, str]] = []
 
-        for customer_name, product_name, rate in invoice_combos:
+        for customer_name, product_name, rate, item_description in invoice_combos:
             customer = _match_customer_exact(db_customers, customer_name)
             if not customer:
                 cps_no_customer.append((customer_name, product_name))
                 continue
-            product = _match_product_exact(db_products, product_name)
+            product = _match_product_for_import(db_products, product_name, item_description)
             if not product:
                 cps_no_product.append((customer_name, product_name, customer.display_name))
                 continue
             if (customer.id, product.id) in existing_cps:
-                cps_already_exist.append((customer_name, product_name))
+                cps_per_customer[customer.display_name].append((product.name, rate, "existing"))
+                cps_already_exist_count += 1
             else:
-                cps_will_create.append((customer_name, product_name, rate))
+                cps_per_customer[customer.display_name].append((product.name, rate, "new"))
+                cps_will_create_count += 1
 
         print(f"\n── Customer → Product/Service rates (Invoice Data) ─────────────────")
-        print(f"  Will be created : {len(cps_will_create)}")
-        print(f"  Already in DB   : {len(cps_already_exist)}")
+        print(f"  Will be created : {cps_will_create_count}")
+        print(f"  Already in DB   : {cps_already_exist_count}")
         print(f"  Customer not found : {len(set(c for c, _ in cps_no_customer))}"
               f" customers ({len(cps_no_customer)} rows)")
         print(f"  Product not found  : {len(set(p for _, p, _ in cps_no_product))} products"
               f" ({len(cps_no_product)} rows)")
 
-        if cps_will_create:
-            print("\n  WILL CREATE:")
-            prev_cust = None
-            for cust, prod, rate in cps_will_create:
-                if cust != prev_cust:
-                    print(f"    [{cust}]")
-                    prev_cust = cust
-                print(f"      {prod}  @ {rate}")
+        if cps_per_customer:
+            print("\n  ALL MATCHED (+ = will create, = = already in DB):")
+            for cust_display, entries in sorted(cps_per_customer.items()):
+                print(f"    [{cust_display}]")
+                for prod_name, rate, status in entries:
+                    marker = "+" if status == "new" else "="
+                    print(f"      {marker} {prod_name}  @ {rate}")
 
         if cps_no_product:
             unique_missing = sorted({p for _, p, _ in cps_no_product})
@@ -402,7 +467,7 @@ def _run_validate(excel_path: Path) -> None:
         total_unmatched = len(unmatched_centers) + len(cps_no_customer) + len(cps_no_product)
         print(f"\n{'─'*60}")
         print(f"Total rows that will be CREATED : "
-              f"{len(matched_centers)} centers + {len(cps_will_create)} service rates")
+              f"{len(matched_centers)} centers + {cps_will_create_count} service rates")
         print(f"Total rows with NO MATCH        : {total_unmatched}")
         print(f"\nRun without --validate to apply.")
 
@@ -438,7 +503,7 @@ def _run_import(excel_path: Path) -> None:
         print("── Step 1: Customer → Product/Service rates ──")
         cps_created = cps_skipped = 0
 
-        for customer_name, product_name, rate in invoice_combos:
+        for customer_name, product_name, rate, item_description in invoice_combos:
             customer = _match_customer_exact(db_customers, customer_name)
             if not customer:
                 errors.append({
@@ -451,7 +516,7 @@ def _run_import(excel_path: Path) -> None:
                 })
                 continue
 
-            product = _match_product_exact(db_products, product_name)
+            product = _match_product_for_import(db_products, product_name, item_description)
             if not product:
                 errors.append({
                     "sheet": INVOICE_SHEET,

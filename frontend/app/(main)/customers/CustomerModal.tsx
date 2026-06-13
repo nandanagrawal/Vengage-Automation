@@ -191,7 +191,7 @@ export function CustomerModal({
         (customer.customer_services ?? []).map((cs) => ({
           key: `cs-${cs.id}`,
           product_and_service_id: cs.product_and_service_id,
-          rate: cs.rate,
+          rate: cs.rate != null ? parseFloat(String(cs.rate)).toFixed(2) : "",
         })),
       );
     } else {
@@ -638,11 +638,17 @@ export function CustomerModal({
                           {/* Rate */}
                           <input
                             type="number"
-                            min="0.0001"
-                            step="0.0001"
+                            min="0.01"
+                            step="0.01"
                             placeholder="0.00"
                             value={row.rate}
-                            onChange={(e) => updateServiceRow(row.key, { rate: e.target.value })}
+                            onChange={(e) => {
+                              const v = e.target.value;
+                              const rounded = v && !isNaN(parseFloat(v))
+                                ? parseFloat(parseFloat(v).toFixed(2)).toString()
+                                : v;
+                              updateServiceRow(row.key, { rate: rounded });
+                            }}
                             className="rounded-lg bg-white border border-gray-200 px-2 py-1.5 text-xs text-gray-900 focus:outline-none focus:ring-1 focus:ring-indigo-200"
                           />
 

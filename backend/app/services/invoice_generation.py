@@ -514,7 +514,7 @@ def _build_line_items_for_center(
     If only some services have parseable ranges, or the group has just one
     service, each service independently receives the full column value.
 
-    Zero-quantity line items are always included (amount=0).
+    Line items with zero quantity or zero rate are excluded from the output.
     """
     desc_base = f"{center_prefix} - {month_label} Invoice month".strip()
 
@@ -610,7 +610,7 @@ def _build_line_items_for_center(
         for cs in group:
             items.append(_make_item(cs, raw_total))
 
-    return items
+    return [li for li in items if li.quantity > 0 and li.rate > 0]
 
 
 def _build_qbo_invoice_payload(

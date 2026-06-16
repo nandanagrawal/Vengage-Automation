@@ -653,6 +653,11 @@ def _build_qbo_invoice_payload(
 
     total = sum(li.amount for li in all_line_items)
 
+    # Compute exact GST on the invoice subtotal (not the sum of per-line GST amounts).
+    # QBO rounds each line's tax independently, which drifts from subtotal × 10%.
+    # Setting TxnTaxDetail.TotalTax overrides QBO's per-line rounding.
+    gst_total = (total * Decimal("0.10")).quantize(Decimal("0.01"))
+
     payload: dict[str, Any] = {
         "CustomerRef": {"value": customer.qbo_id},
         "TxnDate": inv_date.isoformat(),
@@ -660,6 +665,7 @@ def _build_qbo_invoice_payload(
         "CustomerMemo": {"value": memo},
         "GlobalTaxCalculation": "TaxExcluded",
         "Line": [li.qbo_payload for li in all_line_items],
+        "TxnTaxDetail": {"TotalTax": float(gst_total)},
     }
     if customer.primary_email:
         payload["BillEmail"] = {"Address": customer.primary_email}

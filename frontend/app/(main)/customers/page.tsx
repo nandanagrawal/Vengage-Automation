@@ -43,8 +43,7 @@ export default function CustomersPage() {
   const [saving, setSaving] = useState(false);
   const [approving, setApproving] = useState<number | null>(null);
 
-  // Create / edit modal
-  const [createOpen, setCreateOpen] = useState(false);
+  // Edit modal
   const [editCustomer, setEditCustomer] = useState<CustomerRow | null>(null);
 
   // Delete confirmation
@@ -83,20 +82,6 @@ export default function CustomersPage() {
       setSyncMsg(e instanceof Error ? e.message : "Sync failed");
     } finally {
       setSyncing(false);
-    }
-  };
-
-  const onCreate = async (payload: Record<string, unknown>): Promise<CustomerRow> => {
-    setSaving(true);
-    try {
-      const created = await apiPost<CustomerRow>("/customers", payload);
-      await load();
-      return created;
-    } catch (e) {
-      setLoadError(e instanceof Error ? e.message : "Save failed");
-      throw e;
-    } finally {
-      setSaving(false);
     }
   };
 
@@ -184,7 +169,7 @@ export default function CustomersPage() {
       <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 mb-6 animate-fadeInUp">
         <div>
           <h1 className="text-2xl font-bold text-gray-900 tracking-tight">Customers</h1>
-          <p className="text-gray-400 text-sm mt-1">Two-way sync with QuickBooks · Supervisors create, admins approve and push to QBO · Use the grid icon to manage invoice groupings per customer.</p>
+          <p className="text-gray-400 text-sm mt-1">Pulled from QuickBooks via Sync · Edits are local only and are never pushed to QBO · Use the grid icon to manage invoice groupings per customer.</p>
           {isAdmin && pendingCount > 0 && (
             <p className="text-amber-700 text-xs mt-1.5 flex items-center gap-1.5">
               <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
@@ -202,18 +187,10 @@ export default function CustomersPage() {
             </svg>
             {syncing ? "Syncing…" : "Sync"}
           </button>
-          <button type="button" onClick={() => setCreateOpen(true)}
-            className="shimmer-btn inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-gray-900 text-sm font-semibold hover:scale-105 active:scale-95 transition-transform">
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
-            </svg>
-            Add Customer
-          </button>
         </div>
       </div>
 
       {/* Modals */}
-      <CustomerModal open={createOpen} onClose={() => setCreateOpen(false)} onSubmit={onCreate} submitting={saving} mode="create" />
       <CustomerModal open={!!editCustomer} onClose={() => setEditCustomer(null)} onSubmit={onEdit} submitting={saving} mode="edit" customer={editCustomer ?? undefined} />
 
       {/* Delete confirmation */}
@@ -271,7 +248,7 @@ export default function CustomersPage() {
         <div className="divide-y divide-gray-100">
           {paginated.length === 0 && (
             <div className="px-6 py-12 text-center text-gray-400 text-sm">
-              {search ? `No customers match "${search}"` : "No customers yet — add one or run Sync."}
+              {search ? `No customers match "${search}"` : "No customers yet — run Sync to pull from QuickBooks."}
             </div>
           )}
           {paginated.map((c, i) => {

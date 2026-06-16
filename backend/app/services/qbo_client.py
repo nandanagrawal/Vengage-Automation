@@ -203,12 +203,35 @@ class QuickBooksClient:
         page_size = 100
         with httpx.Client(timeout=120.0) as client:
             while True:
-                q = quote(f"SELECT * FROM Item STARTPOSITION {start} MAXRESULTS {page_size}")
+                q = quote(f"SELECT * FROM Item WHERE Active IN (true, false) STARTPOSITION {start} MAXRESULTS {page_size}")
                 url = f"{self.base_url()}/v3/company/{realm_id}/query?query={q}&minorversion={self._minor()}"
                 res = client.get(url, headers=_headers(access_token))
                 res.raise_for_status()
                 data = res.json()
                 batch = data.get("QueryResponse", {}).get("Item", []) or []
+                if isinstance(batch, dict):
+                    batch = [batch]
+                if not batch:
+                    break
+                out.extend(batch)
+                if len(batch) < page_size:
+                    break
+                start += page_size
+        return out
+
+    def query_accounts(self, access_token: str, realm_id: str) -> list[dict[str, Any]]:
+        """Return all Account objects from QBO."""
+        out: list[dict[str, Any]] = []
+        start = 1
+        page_size = 100
+        with httpx.Client(timeout=60.0) as client:
+            while True:
+                q = quote(f"SELECT * FROM Account STARTPOSITION {start} MAXRESULTS {page_size}")
+                url = f"{self.base_url()}/v3/company/{realm_id}/query?query={q}&minorversion={self._minor()}"
+                res = client.get(url, headers=_headers(access_token))
+                res.raise_for_status()
+                data = res.json()
+                batch = data.get("QueryResponse", {}).get("Account", []) or []
                 if isinstance(batch, dict):
                     batch = [batch]
                 if not batch:

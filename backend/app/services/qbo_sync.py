@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, timedelta
 
 from sqlalchemy.orm import Session
 
@@ -16,7 +16,6 @@ from app.services.qbo_client import (
     SupportsQuickBooks,
     apply_qbo_customer_to_model,
     apply_qbo_item_to_model,
-    customer_model_to_qbo_payload,
     effective_local_time,
     qbo_time,
 )
@@ -137,7 +136,7 @@ def run_quickbooks_sync(db: Session, qbo: SupportsQuickBooks | None = None) -> S
     client = qbo or QuickBooksClient()
     token, realm = ensure_qbo_credentials()
 
-    pulled = pushed = created_remote = 0
+    pulled = 0
     activity_rows = 0
 
     # ── Pull customers (QBO → app), last-write-wins vs local timestamps
@@ -182,56 +181,7 @@ def run_quickbooks_sync(db: Session, qbo: SupportsQuickBooks | None = None) -> S
             db.add(row)
             db.commit()
 
-    # ── Push local changes (app → QBO) — only approved customers
-    for row in db.query(Customer).filter(Customer.status == CustomerStatus.approved).order_by(Customer.id).all():
-        payload = customer_model_to_qbo_payload(row)
-
-        if not row.qbo_id:
-            created = client.create_customer(token, realm, payload)
-            row.qbo_id = str(created.get("Id", ""))
-            row.qbo_sync_token = str(created.get("SyncToken", "")) or None
-            t = qbo_time(created)
-            if t:
-                row.qbo_last_updated = t
-            row.last_pushed_to_qbo_at = datetime.now(timezone.utc)
-            db.add(row)
-            db.commit()
-            created_remote += 1
-            continue
-
-        last_push = row.last_pushed_to_qbo_at
-        if last_push is None:
-            should_push = True
-        else:
-            if last_push.tzinfo is None:
-                last_push = last_push.replace(tzinfo=timezone.utc)
-            ua = row.updated_at
-            if ua.tzinfo is None:
-                ua = ua.replace(tzinfo=timezone.utc)
-            should_push = ua > last_push
-
-        if should_push:
-            try:
-                updated = client.update_customer(
-                    token,
-                    realm,
-                    row.qbo_id,
-                    payload,
-                    row.qbo_sync_token,
-                )
-                row.qbo_sync_token = str(updated.get("SyncToken", "")) or row.qbo_sync_token
-                t = qbo_time(updated)
-                if t:
-                    row.qbo_last_updated = t
-                row.last_pushed_to_qbo_at = datetime.now(timezone.utc)
-                db.add(row)
-                db.commit()
-                pushed += 1
-            except Exception:
-                row.last_pushed_to_qbo_at = datetime.now(timezone.utc)
-                db.add(row)
-                db.commit()
-
+    # Customers are pull-only: QBO is the source of truth, never pushed to from this app.
     items_upserted, items_removed_local = _sync_items_from_qbo(db, client, token, realm)
 
     # ── Invoice email activity (last 30 days): replace snapshot
@@ -257,8 +207,6 @@ def run_quickbooks_sync(db: Session, qbo: SupportsQuickBooks | None = None) -> S
 
     return SyncResult(
         customers_pulled=pulled,
-        customers_pushed=pushed,
-        customers_created_remote=created_remote,
         invoice_activity_rows=activity_rows,
         items_upserted=items_upserted,
         items_removed_local=items_removed_local,

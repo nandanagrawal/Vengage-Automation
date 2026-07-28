@@ -328,6 +328,11 @@ export type RecentInvoiceRow = {
   file_name: string | null;
 };
 
+export type PaginatedInvoices = {
+  total: number;
+  items: RecentInvoiceRow[];
+};
+
 // ── Invoice validation / multi-step flow ──────────────────────────────────────
 
 export type ValidatedRow = {

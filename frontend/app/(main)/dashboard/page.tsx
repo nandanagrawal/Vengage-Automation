@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { apiGet, type DashboardStats, type RecentInvoiceRow } from "@/lib/api";
+import { useEffect, useRef, useState } from "react";
+import { apiGet, type DashboardStats, type PaginatedInvoices, type RecentInvoiceRow } from "@/lib/api";
 
 function initials(name: string | null): string {
   if (!name) return "?";
@@ -44,15 +44,33 @@ function Spinner() {
 export default function DashboardPage() {
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [statsLoading, setStatsLoading] = useState(true);
+
   const [invoices, setInvoices] = useState<RecentInvoiceRow[]>([]);
+  const [total, setTotal] = useState(0);
   const [invoicesLoading, setInvoicesLoading] = useState(true);
+
   const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
 
+  // Debounce search input by 300 ms
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  function handleSearchChange(val: string) {
+    setSearch(val);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => {
+      setDebouncedSearch(val);
+      setPage(1);
+    }, 300);
+  }
+
+  // Reset to page 1 when pageSize changes
+  useEffect(() => { setPage(1); }, [pageSize]);
+
+  // Fetch stats once
   useEffect(() => {
     let cancelled = false;
-
     (async () => {
       try {
         const s = await apiGet<DashboardStats>("/dashboard/stats");
@@ -60,34 +78,37 @@ export default function DashboardPage() {
       } catch { /* silently fail */ }
       finally { if (!cancelled) setStatsLoading(false); }
     })();
+    return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Fetch invoices on page / pageSize / search change
+  useEffect(() => {
+    let cancelled = false;
+    setInvoicesLoading(true);
+
+    const params = new URLSearchParams({
+      page: String(page),
+      page_size: String(pageSize),
+      ...(debouncedSearch ? { search: debouncedSearch } : {}),
+    });
 
     (async () => {
       try {
-        const rows = await apiGet<RecentInvoiceRow[]>("/dashboard/recent-invoices");
-        if (!cancelled) setInvoices(rows);
+        const res = await apiGet<PaginatedInvoices>(`/dashboard/recent-invoices?${params}`);
+        if (!cancelled) {
+          setInvoices(res.items);
+          setTotal(res.total);
+        }
       } catch { /* silently fail */ }
       finally { if (!cancelled) setInvoicesLoading(false); }
     })();
 
     return () => { cancelled = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [page, pageSize, debouncedSearch]);
 
-  const filtered = useMemo(() => {
-    const q = search.toLowerCase().trim();
-    if (!q) return invoices;
-    return invoices.filter((r) =>
-      (r.invoice_number ?? "").toLowerCase().includes(q) ||
-      (r.customer_name ?? "").toLowerCase().includes(q) ||
-      r.group.toLowerCase().includes(q) ||
-      (r.file_name ?? "").toLowerCase().includes(q),
-    );
-  }, [invoices, search]);
-
-  useEffect(() => { setPage(1); }, [search, pageSize]);
-
-  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
-  const paginated = filtered.slice((page - 1) * pageSize, page * pageSize);
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
   const statCards = [
     {
@@ -168,12 +189,14 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* Recent Invoices table */}
+      {/* Invoices table */}
       <div className="card anim-fade-up" style={{ overflow: "hidden", animationDelay: "0.25s" }}>
         <div className="section-header" style={{ flexWrap: "wrap", gap: 12 }}>
           <div>
             <div className="section-title">Invoices Created</div>
-            <div style={{ fontSize: 11, color: "var(--text-3)", marginTop: 1 }}>Last 50 · newest first</div>
+            <div style={{ fontSize: 11, color: "var(--text-3)", marginTop: 1 }}>
+              {total > 0 ? `${total.toLocaleString()} total · newest first` : "Newest first"}
+            </div>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
             {/* Search */}
@@ -185,18 +208,19 @@ export default function DashboardPage() {
                 type="text"
                 placeholder="Search invoices…"
                 value={search}
-                onChange={(e) => setSearch(e.target.value)}
+                onChange={(e) => handleSearchChange(e.target.value)}
                 style={{ paddingLeft: 28, paddingRight: search ? 28 : 10, paddingTop: 6, paddingBottom: 6, fontSize: 12, borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg-input, var(--surface-2))", color: "var(--text-1)", width: 180, outline: "none" }}
               />
               {search && (
-                <button onClick={() => setSearch("")} style={{ position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", color: "var(--text-4)", fontSize: 12, padding: 0 }}>✕</button>
+                <button onClick={() => { setSearch(""); setDebouncedSearch(""); setPage(1); }} style={{ position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", color: "var(--text-4)", fontSize: 12, padding: 0 }}>✕</button>
               )}
             </div>
             {!invoicesLoading && (
               <span className="badge badge-neutral">
-                {search ? `${filtered.length} / ${invoices.length}` : `${invoices.length}`} records
+                {total.toLocaleString()} records
               </span>
             )}
+            {invoicesLoading && <Spinner />}
           </div>
         </div>
 
@@ -207,31 +231,36 @@ export default function DashboardPage() {
           ))}
         </div>
 
-        {/* Loading */}
-        {invoicesLoading && (
+        {/* Loading skeleton */}
+        {invoicesLoading && invoices.length === 0 && (
           <div style={{ padding: "40px 20px", display: "flex", alignItems: "center", justifyContent: "center", gap: 10, color: "var(--text-3)", fontSize: 13 }}>
             <Spinner /> Loading…
           </div>
         )}
 
         {/* Empty */}
-        {!invoicesLoading && invoices.length === 0 && (
+        {!invoicesLoading && total === 0 && !debouncedSearch && (
           <div style={{ padding: "48px 20px", textAlign: "center", color: "var(--text-3)", fontSize: 14 }}>
             No invoices yet — upload a file in Import to generate invoices.
           </div>
         )}
-        {!invoicesLoading && invoices.length > 0 && filtered.length === 0 && (
+        {!invoicesLoading && total === 0 && debouncedSearch && (
           <div style={{ padding: "40px 20px", textAlign: "center", color: "var(--text-3)", fontSize: 14 }}>
-            No invoices match &ldquo;{search}&rdquo;
+            No invoices match &ldquo;{debouncedSearch}&rdquo;
           </div>
         )}
 
         {/* Rows */}
-        {!invoicesLoading && paginated.map((row, i) => (
+        {invoices.map((row, i) => (
           <div
             key={row.id}
             className="table-row"
-            style={{ gridTemplateColumns: "90px 1fr 1fr 110px 100px 140px", animationDelay: `${0.03 * i}s` }}
+            style={{
+              gridTemplateColumns: "90px 1fr 1fr 110px 100px 140px",
+              animationDelay: `${0.03 * i}s`,
+              opacity: invoicesLoading ? 0.5 : 1,
+              transition: "opacity 0.15s",
+            }}
           >
             {/* INV # */}
             <span style={{ fontFamily: "monospace", fontSize: 12, color: "var(--text-2)", fontWeight: 600 }}>
@@ -264,18 +293,19 @@ export default function DashboardPage() {
           </div>
         ))}
 
-        {!invoicesLoading && filtered.length > 0 && (
+        {/* Footer: pagination */}
+        {total > 0 && (
           <div className="table-footer" style={{ flexWrap: "wrap", gap: 8 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <span style={{ fontSize: 12, color: "var(--text-3)" }}>
-                {(page - 1) * pageSize + 1}–{Math.min(page * pageSize, filtered.length)} of {filtered.length}
+                {(page - 1) * pageSize + 1}–{Math.min(page * pageSize, total)} of {total.toLocaleString()}
               </span>
               <select
                 value={pageSize}
                 onChange={(e) => setPageSize(Number(e.target.value))}
                 style={{ fontSize: 11, color: "var(--text-3)", background: "var(--surface-2)", border: "1px solid var(--border)", borderRadius: 6, padding: "2px 6px", cursor: "pointer" }}
               >
-                {[10, 25, 50].map((s) => <option key={s} value={s}>{s} / page</option>)}
+                {[10, 25, 50, 100].map((s) => <option key={s} value={s}>{s} / page</option>)}
               </select>
             </div>
             {totalPages > 1 && (

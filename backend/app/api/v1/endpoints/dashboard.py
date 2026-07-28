@@ -86,16 +86,44 @@ class RecentInvoiceRow(BaseModel):
     file_name: str | None
 
 
-@router.get("/dashboard/recent-invoices", response_model=list[RecentInvoiceRow])
+class PaginatedInvoices(BaseModel):
+    total: int
+    items: list[RecentInvoiceRow]
+
+
+@router.get("/dashboard/recent-invoices", response_model=PaginatedInvoices)
 def get_recent_invoices(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
-    limit: int = 50,
+    page: int = 1,
+    page_size: int = 10,
+    search: str = "",
 ):
+    q = db.query(GeneratedInvoice)
+
+    if search:
+        term = f"%{search.strip()}%"
+        customer_ids_matching = [
+            c.id for c in db.query(Customer.id).filter(Customer.display_name.ilike(term)).all()
+        ]
+        upload_ids_matching = [
+            u.id for u in db.query(InvoiceUpload.id).filter(InvoiceUpload.file_name.ilike(term)).all()
+        ]
+        from sqlalchemy import or_
+        q = q.filter(
+            or_(
+                GeneratedInvoice.invoice_number.ilike(term),
+                GeneratedInvoice.center_group_name.ilike(term),
+                GeneratedInvoice.customer_id.in_(customer_ids_matching) if customer_ids_matching else False,
+                GeneratedInvoice.invoice_upload_id.in_(upload_ids_matching) if upload_ids_matching else False,
+            )
+        )
+
+    total = q.count()
     rows = (
-        db.query(GeneratedInvoice)
-        .order_by(GeneratedInvoice.id.desc())
-        .limit(limit)
+        q.order_by(GeneratedInvoice.id.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
         .all()
     )
 
@@ -105,15 +133,18 @@ def get_recent_invoices(
     customers = {c.id: c.display_name for c in db.query(Customer).filter(Customer.id.in_(customer_ids)).all()} if customer_ids else {}
     uploads = {u.id: u.file_name for u in db.query(InvoiceUpload).filter(InvoiceUpload.id.in_(upload_ids)).all()} if upload_ids else {}
 
-    return [
-        RecentInvoiceRow(
-            id=r.id,
-            invoice_number=r.invoice_number,
-            customer_name=customers.get(r.customer_id) if r.customer_id else None,
-            group=r.center_group_name or "—",
-            sent_at=r.sent_at.isoformat() if r.sent_at else None,
-            send_status=r.send_status or "pending",
-            file_name=uploads.get(r.invoice_upload_id) if r.invoice_upload_id else None,
-        )
-        for r in rows
-    ]
+    return PaginatedInvoices(
+        total=total,
+        items=[
+            RecentInvoiceRow(
+                id=r.id,
+                invoice_number=r.invoice_number,
+                customer_name=customers.get(r.customer_id) if r.customer_id else None,
+                group=r.center_group_name or "—",
+                sent_at=r.sent_at.isoformat() if r.sent_at else None,
+                send_status=r.send_status or "pending",
+                file_name=uploads.get(r.invoice_upload_id) if r.invoice_upload_id else None,
+            )
+            for r in rows
+        ],
+    )

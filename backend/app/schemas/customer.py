@@ -37,8 +37,16 @@ class CustomerServiceInput(BaseModel):
 class CustomerServiceResponse(BaseModel):
     id: int
     product_and_service_id: int
+    name: str | None = None
     rate: Decimal
     description: str | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class CenterResponse(BaseModel):
+    id: int
+    name: str
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -166,6 +174,7 @@ class CustomerResponse(BaseModel):
     add_attachment_in_mail: bool = False
     customer_services: list[CustomerServiceResponse] = Field(default_factory=list)
     customer_type_ids: list[int] = Field(default_factory=list)
+    centers: list[CenterResponse] = Field(default_factory=list)
 
     created_at: datetime
     updated_at: datetime
@@ -195,11 +204,16 @@ def customer_response_from_row(row: Customer) -> CustomerResponse:
                 CustomerServiceResponse(
                     id=cs.id,
                     product_and_service_id=cs.product_and_service_id,
+                    name=cs.product_and_service.name if cs.product_and_service else None,
                     rate=cs.rate,
                     description=cs.product_and_service.description if cs.product_and_service else None,
                 )
                 for cs in row.customer_services
             ],
             "customer_type_ids": [ct.id for ct in row.customer_types],
+            "centers": [
+                CenterResponse(id=c.id, name=c.name)
+                for c in sorted(row.centers, key=lambda c: c.name)
+            ],
         },
     )

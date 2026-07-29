@@ -109,23 +109,36 @@ PRODUCT_COLUMN_MAP: dict[str, list[str]] = {
     "direct calls handling charges": ["direct call (6)"],
     "e-referral transmission charges": ["total e-referrals (11)"],
     "e-referral manual sms charges": ["e-referral manual sms count (13)"],
-    "bookings via specialist portal": ["appointments (specialist) (15)"],
+    "bookings via specialist portal": ["specialist's reception (15)"],
     "e-referral greeting sms charges": ["e-referral greeting sms count (12)"],
-    "bookings directly done by customer team": ["appointments (operators) (14)"],
+    # "Bookings directly done by customer team B0001" — suffix stripped → matches here (Col N)
+    "bookings directly done by customer team": ["appointments by customer reception"],
     "misc item": ["sms count (chat) (16)"],
-    "e-referral portal monthly subscription fees": ["total e-referrals (11)"],
     "call forwarding - telephony charges": [
         "voice call forwarding bh (mins) (9)",
         "voice call forwarding ooh (mins) (10)",
     ],
-    "olivia ai - walkin services call handling": ["walkin (7)"],
-    "internal e-referral charges": ["total e-referrals (11)"],
+    # "Olivia AI - Walkin Services Call handling B0001" — suffix stripped → matches here (Col V)
+    "olivia ai - walkin services call handling": ["walkin booking - telephony channel"],
     "external e-referral charges": ["e-referral greeting sms count (12)"],
+}
+
+# Difference mappings: quantity = col_a − col_b  (clamped to 0 if negative).
+# Key = product base name (lower-case, no suffix).
+# Value = (minuend column substring, subtrahend column substring).
+PRODUCT_COLUMN_DIFF_MAP: dict[str, tuple[str, str]] = {
+    # "Internal E-Referral Charges B0003" → Col K − Col L
+    #   = Total E-referrals (11) − E-referral Greeting SMS Count (12)
+    "internal e-referral charges": (
+        "total e-referrals (11)",
+        "e-referral greeting sms count (12)",
+    ),
 }
 
 # Products that always have quantity = 1 regardless of file data
 FIXED_QUANTITY_PRODUCTS: frozenset[str] = frozenset({
     "kiosk monthly usage and support charges",
+    "e-referral portal monthly subscription fees",
 })
 
 
@@ -305,6 +318,16 @@ def _month_label(inv_date: date) -> str:
     return inv_date.strftime("%b%y").upper()
 
 
+def _desc_month_year(inv_date: date) -> str:
+    """e.g. 'June 2026' — used in line-item descriptions."""
+    return inv_date.strftime("%B %Y")
+
+
+def _memo_on_statement(inv_date: date) -> str:
+    """e.g. 'INVOICE JUN2026' — QBO PrivateNote / Memo on Statement field."""
+    return f"INVOICE {inv_date.strftime('%b%Y').upper()}"
+
+
 # ── Slab pricing helpers ──────────────────────────────────────────────────────
 
 # Matches "(Slab-1)", "(Slab-2b)", "(slab_3a)" etc. anywhere in the name.
@@ -343,6 +366,30 @@ def _get_col_substrings(product_name_lower: str) -> list[str] | None:
     no_both = _SERVICE_CODE_RE.sub("", no_slab).strip()
     if no_both != product_name_lower and no_both in PRODUCT_COLUMN_MAP:
         return PRODUCT_COLUMN_MAP[no_both]
+
+    return None
+
+
+def _get_col_diff(product_name_lower: str) -> tuple[str, str] | None:
+    """Return (minuend_substr, subtrahend_substr) for difference-based products.
+
+    Applies the same four-step normalization as _get_col_substrings so that
+    service-code and slab suffixes are handled automatically.
+    """
+    if product_name_lower in PRODUCT_COLUMN_DIFF_MAP:
+        return PRODUCT_COLUMN_DIFF_MAP[product_name_lower]
+
+    no_code = _SERVICE_CODE_RE.sub("", product_name_lower).strip()
+    if no_code != product_name_lower and no_code in PRODUCT_COLUMN_DIFF_MAP:
+        return PRODUCT_COLUMN_DIFF_MAP[no_code]
+
+    no_slab = _SLAB_SUFFIX_RE.sub("", product_name_lower).strip()
+    if no_slab != product_name_lower and no_slab in PRODUCT_COLUMN_DIFF_MAP:
+        return PRODUCT_COLUMN_DIFF_MAP[no_slab]
+
+    no_both = _SERVICE_CODE_RE.sub("", no_slab).strip()
+    if no_both != product_name_lower and no_both in PRODUCT_COLUMN_DIFF_MAP:
+        return PRODUCT_COLUMN_DIFF_MAP[no_both]
 
     return None
 
@@ -398,6 +445,17 @@ def _slab_qty(total: Decimal, start: int, end: int | None) -> Decimal:
 
 # ── Quantity lookup ───────────────────────────────────────────────────────────
 
+def _normalize_product_name(name_lower: str) -> str:
+    """Strip slab suffix and service-code suffix for map/set lookups."""
+    no_slab = _SLAB_SUFFIX_RE.sub("", name_lower).strip()
+    return _SERVICE_CODE_RE.sub("", no_slab).strip()
+
+
+def _is_fixed_quantity(name_lower: str) -> bool:
+    """Return True if this product (with or without suffix) is a fixed-qty product."""
+    return name_lower in FIXED_QUANTITY_PRODUCTS or _normalize_product_name(name_lower) in FIXED_QUANTITY_PRODUCTS
+
+
 def _get_quantity(
     product_name_lower: str,
     center_metrics: dict[str, Decimal],
@@ -407,8 +465,15 @@ def _get_quantity(
     Returns None if there is no mapping at all (product should be skipped).
     Returns Decimal (possibly 0) when a mapping exists but has zero value.
     """
-    if product_name_lower in FIXED_QUANTITY_PRODUCTS:
+    if _is_fixed_quantity(product_name_lower):
         return Decimal("1")
+
+    diff_pair = _get_col_diff(product_name_lower)
+    if diff_pair is not None:
+        minuend_sub, subtrahend_sub = diff_pair
+        minuend = sum((v for col, v in center_metrics.items() if minuend_sub in col), Decimal("0"))
+        subtrahend = sum((v for col, v in center_metrics.items() if subtrahend_sub in col), Decimal("0"))
+        return max(Decimal("0"), minuend - subtrahend)
 
     col_substrings = _get_col_substrings(product_name_lower)
     if col_substrings:
@@ -434,7 +499,7 @@ def _get_quantity(
 class _LineItem:
     product_and_service_id: int | None
     product_name: str
-    center_prefix: str
+    center_name: str
     description: str
     quantity: Decimal
     rate: Decimal
@@ -492,10 +557,11 @@ class GenerationResult:
 
 
 def _build_line_items_for_center(
-    center_prefix: str,
+    center_name: str,
     center_metrics: dict[str, Decimal],
     customer_services: list[CustomerProductAndService],
-    month_label: str,
+    desc_month_year: str,
+    service_date: date,
     tax_code_id: str = "",
 ) -> list[_LineItem]:
     """Build _LineItem objects for one center, supporting slab-based pricing.
@@ -516,28 +582,45 @@ def _build_line_items_for_center(
 
     Line items with zero quantity or zero rate are excluded from the output.
     """
-    desc_base = f"{center_prefix} - {month_label} Invoice month".strip()
+    col_b = center_name.strip()
 
-    def _make_item(cs: CustomerProductAndService, qty: Decimal) -> _LineItem:
+    def _standard_desc() -> str:
+        """Column B value; falls back to empty string if absent."""
+        return col_b
+
+    def _slab_desc(ps_description: str | None) -> str:
+        """Column B – slab description Booking, with fallbacks for missing halves."""
+        slab_part = (ps_description or "").strip()
+        if col_b and slab_part:
+            return f"{col_b} – {slab_part} Booking"
+        return col_b or slab_part
+
+    def _make_item(cs: CustomerProductAndService, qty: Decimal, description: str) -> _LineItem:
         ps = cs.product_and_service
         rate = cs.rate
         amount = (qty * rate).quantize(Decimal("0.01"))
+        qty_f = float(qty)
+        rate_f = float(rate)
+        # QBO validates Amount == UnitPrice * Qty using its own float arithmetic.
+        # Derive Amount from the same float values we send so rounding matches.
+        qbo_amount = round(qty_f * rate_f, 2)
         qbo_payload: dict[str, Any] = {
             "DetailType": "SalesItemLineDetail",
-            "Description": desc_base,
-            "Amount": float(amount),
+            "Description": description,
+            "Amount": qbo_amount,
             "SalesItemLineDetail": {
                 "ItemRef": {"value": ps.qbo_id},
-                "Qty": float(qty),
-                "UnitPrice": float(rate),
+                "Qty": qty_f,
+                "UnitPrice": rate_f,
                 "TaxCodeRef": {"value": tax_code_id or settings.QBO_LINE_TAX_CODE},
+                "ServiceDate": service_date.isoformat(),
             },
         }
         return _LineItem(
             product_and_service_id=ps.id,
             product_name=ps.name,
-            center_prefix=center_prefix,
-            description=desc_base,
+            center_name=center_name,
+            description=description,
             quantity=qty,
             rate=rate,
             amount=amount,
@@ -554,8 +637,16 @@ def _build_line_items_for_center(
             continue
         name_lower = ps.name.lower()
 
-        if name_lower in FIXED_QUANTITY_PRODUCTS:
+        if _is_fixed_quantity(name_lower):
             col_groups.setdefault("__fixed__", []).append(cs)
+            continue
+
+        diff_pair = _get_col_diff(name_lower)
+        if diff_pair is not None:
+            # Encode both column substrings into the key so each unique pair
+            # gets its own group and the raw-total phase can recover them.
+            key = f"__diff__{diff_pair[0]}||{diff_pair[1]}"
+            col_groups.setdefault(key, []).append(cs)
             continue
 
         col_subs = _get_col_substrings(name_lower)
@@ -577,6 +668,17 @@ def _build_line_items_for_center(
         # Resolve raw total for this column group
         if key == "__fixed__":
             raw_total = Decimal("1")
+        elif key.startswith("__diff__"):
+            minuend_sub, subtrahend_sub = key[len("__diff__"):].split("||")
+            minuend = sum(
+                (v for col, v in center_metrics.items() if minuend_sub in col),
+                Decimal("0"),
+            )
+            subtrahend = sum(
+                (v for col, v in center_metrics.items() if subtrahend_sub in col),
+                Decimal("0"),
+            )
+            raw_total = max(Decimal("0"), minuend - subtrahend)
         elif key.startswith("__fb__"):
             pname = key[len("__fb__"):]
             raw_total = sum(
@@ -602,13 +704,13 @@ def _build_line_items_for_center(
                 slab_pairs.sort(key=lambda x: x[1][0])  # type: ignore[index]
                 for cs, (start, end) in slab_pairs:  # type: ignore[misc]
                     qty = _slab_qty(raw_total, start, end)
-                    items.append(_make_item(cs, qty))
+                    items.append(_make_item(cs, qty, _slab_desc(cs.product_and_service.description)))
                 continue
             # Partial or no parseable ranges → fall through to full-qty mode
 
         # Non-slab (or partial ranges): each service gets the full raw total
         for cs in group:
-            items.append(_make_item(cs, raw_total))
+            items.append(_make_item(cs, raw_total, _standard_desc()))
 
     return [li for li in items if li.quantity > 0 and li.rate > 0]
 
@@ -623,9 +725,10 @@ def _build_qbo_invoice_payload(
     tax_code_id: str = "",
 ) -> tuple[dict[str, Any], Decimal, list[_LineItem]] | None:
     """Build the QBO invoice payload with per-center line items."""
-    month_label = _month_label(inv_date)
     due = _due_date(inv_date)
     memo = _memo(inv_date)
+    memo_stmt = _memo_on_statement(inv_date)
+    dmyear = _desc_month_year(inv_date)
 
     all_line_items: list[_LineItem] = []
 
@@ -636,14 +739,15 @@ def _build_qbo_invoice_payload(
         name_lower = name.lower()
         # Metrics keyed by col-0 value (= Center.name lower)
         center_metrics = parsed.rows.get(name_lower, {})
-        # Description prefix = first token of col-2; fall back to center name
-        center_prefix = parsed.center_prefixes.get(name_lower, ctr.name)
+        # col-1 = full center name (e.g. "Olivia Medical Center"); fall back to DB name
+        center_col1_name = parsed.center_col1_names.get(name_lower) or ctr.name
 
         items = _build_line_items_for_center(
-            center_prefix=center_prefix,
+            center_name=center_col1_name,
             center_metrics=center_metrics,
             customer_services=customer_services,
-            month_label=month_label,
+            desc_month_year=dmyear,
+            service_date=inv_date,
             tax_code_id=tax_code_id,
         )
         all_line_items.extend(items)
@@ -663,6 +767,7 @@ def _build_qbo_invoice_payload(
         "TxnDate": inv_date.isoformat(),
         "DueDate": due.isoformat(),
         "CustomerMemo": {"value": memo},
+        "PrivateNote": memo_stmt,
         "GlobalTaxCalculation": "TaxExcluded",
         "Line": [li.qbo_payload for li in all_line_items],
         "TxnTaxDetail": {"TotalTax": float(gst_total)},
@@ -939,6 +1044,7 @@ def build_line_item_preview(body: "RevalidateRequest", db: Session) -> dict:
     due = _due_date(inv_date)
     memo = _memo(inv_date)
     month_label = _month_label(inv_date)
+    dmyear = _desc_month_year(inv_date)
 
     # Last invoice number from DB
     last_inv = (
@@ -1022,12 +1128,13 @@ def build_line_item_preview(body: "RevalidateRequest", db: Session) -> dict:
             line_items: list[dict] = []
             for name_lower in group_names_lower:
                 center_metrics = parsed.rows.get(name_lower, {})
-                center_prefix = parsed.center_prefixes.get(name_lower, name_lower)
+                center_col1_name = parsed.center_col1_names.get(name_lower) or name_lower
                 items = _build_line_items_for_center(
-                    center_prefix=center_prefix,
+                    center_name=center_col1_name,
                     center_metrics=center_metrics,
                     customer_services=active_services,
-                    month_label=month_label,
+                    desc_month_year=dmyear,
+                    service_date=inv_date,
                 )
                 for li in items:
                     tax_amount = (li.amount * Decimal("0.1")).quantize(Decimal("0.0001"))

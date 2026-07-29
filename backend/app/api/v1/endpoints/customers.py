@@ -14,6 +14,7 @@ from app.schemas.customer import (
     CustomerUpdate,
     customer_response_from_row,
 )
+from app.models.customer_product_and_service import CustomerProductAndService
 from app.services.customer_service import create_customer_row, update_customer_row
 
 router = APIRouter()
@@ -23,8 +24,10 @@ def _get_customer_or_404(db: Session, customer_id: int) -> Customer:
     row = (
         db.query(Customer)
         .options(
-            selectinload(Customer.customer_services),
+            selectinload(Customer.customer_services)
+            .selectinload(CustomerProductAndService.product_and_service),
             selectinload(Customer.customer_types),
+            selectinload(Customer.centers),
         )
         .filter(Customer.id == customer_id)
         .first()
@@ -42,8 +45,10 @@ def list_customers(
     rows = (
         db.query(Customer)
         .options(
-            selectinload(Customer.customer_services),
+            selectinload(Customer.customer_services)
+            .selectinload(CustomerProductAndService.product_and_service),
             selectinload(Customer.customer_types),
+            selectinload(Customer.centers),
         )
         .order_by(Customer.display_name)
         .all()

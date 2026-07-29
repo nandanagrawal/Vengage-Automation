@@ -225,8 +225,8 @@ export default function DashboardPage() {
         </div>
 
         {/* Header row */}
-        <div className="table-header-row" style={{ gridTemplateColumns: "90px 1fr 1fr 110px 100px 140px" }}>
-          {["INV #", "CUSTOMER", "GROUP", "DELIVERY DATE", "STATUS", "FILE NAME"].map((h) => (
+        <div className="table-header-row" style={{ gridTemplateColumns: "90px 1fr 1fr 110px 110px 100px 140px" }}>
+          {["INV #", "CUSTOMER", "GROUP", "CREATED", "DELIVERY DATE", "STATUS", "FILE NAME"].map((h) => (
             <span key={h} className="table-header-cell">{h}</span>
           ))}
         </div>
@@ -256,7 +256,7 @@ export default function DashboardPage() {
             key={row.id}
             className="table-row"
             style={{
-              gridTemplateColumns: "90px 1fr 1fr 110px 100px 140px",
+              gridTemplateColumns: "90px 1fr 1fr 110px 110px 100px 140px",
               animationDelay: `${0.03 * i}s`,
               opacity: invoicesLoading ? 0.5 : 1,
               transition: "opacity 0.15s",
@@ -279,6 +279,9 @@ export default function DashboardPage() {
 
             {/* GROUP */}
             <span style={{ fontSize: 13, color: "var(--primary)", fontWeight: 500 }}>{row.group}</span>
+
+            {/* CREATED */}
+            <span className="table-cell-secondary">{fmtDate(row.created_at)}</span>
 
             {/* DELIVERY DATE */}
             <span className="table-cell-secondary">{fmtDate(row.sent_at)}</span>

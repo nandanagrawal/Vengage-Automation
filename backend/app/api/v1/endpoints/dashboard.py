@@ -84,6 +84,7 @@ class RecentInvoiceRow(BaseModel):
     sent_at: str | None
     send_status: str
     file_name: str | None
+    created_at: str | None
 
 
 class PaginatedInvoices(BaseModel):
@@ -144,6 +145,7 @@ def get_recent_invoices(
                 sent_at=r.sent_at.isoformat() if r.sent_at else None,
                 send_status=r.send_status or "pending",
                 file_name=uploads.get(r.invoice_upload_id) if r.invoice_upload_id else None,
+                created_at=r.created_at.isoformat() if r.created_at else None,
             )
             for r in rows
         ],

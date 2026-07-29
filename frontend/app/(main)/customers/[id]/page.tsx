@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
-import { apiGet, apiPatch, type CustomerRow } from "@/lib/api";
+import { apiGet, apiPatch, type CustomerRow, type CustomerCenterRow, type CustomerServiceRow } from "@/lib/api";
 import { CustomerModal } from "../CustomerModal";
 
 function statusStyle(s: string) {
@@ -26,11 +26,54 @@ function InfoField({ label, value }: { label: string; value: React.ReactNode }) 
   );
 }
 
-function InfoSection({ title, children }: { title: string; children: React.ReactNode }) {
+function InfoSection({ title, children, cols = 3 }: { title: string; children: React.ReactNode; cols?: number }) {
   return (
     <div className="rounded-xl border border-gray-200 p-5" style={{ background: "var(--surface-2)" }}>
       <p className="text-xs font-bold uppercase tracking-widest text-gray-400 mb-4">{title}</p>
-      <div className="grid grid-cols-2 md:grid-cols-3 gap-4">{children}</div>
+      <div className={`grid grid-cols-2 md:grid-cols-${cols} gap-4`}>{children}</div>
+    </div>
+  );
+}
+
+function CenterTag({ name }: { name: string }) {
+  return (
+    <span style={{
+      display: "inline-flex", alignItems: "center",
+      padding: "3px 10px", borderRadius: 6, fontSize: 12, fontWeight: 600,
+      background: "var(--primary-bg)", color: "var(--primary)",
+      border: "1px solid color-mix(in srgb, var(--primary) 20%, transparent)",
+      fontFamily: "monospace",
+    }}>
+      {name}
+    </span>
+  );
+}
+
+function ServiceRow({ svc }: { svc: CustomerServiceRow }) {
+  return (
+    <div style={{
+      display: "flex", alignItems: "center", justifyContent: "space-between",
+      padding: "10px 14px", borderRadius: 8,
+      border: "1px solid var(--border)", background: "var(--surface-1)",
+      gap: 12,
+    }}>
+      <div style={{ minWidth: 0 }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-1)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+          {svc.name ?? `Product #${svc.product_and_service_id}`}
+        </div>
+        {svc.description && (
+          <div style={{ fontSize: 11, color: "var(--text-3)", marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+            {svc.description}
+          </div>
+        )}
+      </div>
+      <span style={{
+        flexShrink: 0, fontSize: 13, fontWeight: 700,
+        color: "var(--success)", background: "var(--success-bg)",
+        padding: "2px 9px", borderRadius: 6,
+      }}>
+        ${Number(svc.rate).toFixed(3)}
+      </span>
     </div>
   );
 }
@@ -168,6 +211,36 @@ export default function CustomerDetailPage() {
             <InfoField label="ZIP" value={customer.shipping_zip} />
             <InfoField label="Country" value={customer.shipping_country} />
           </InfoSection>
+        )}
+
+        {/* Centers */}
+        {customer.centers?.length > 0 && (
+          <div className="rounded-xl border border-gray-200 p-5" style={{ background: "var(--surface-2)" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+              <p className="text-xs font-bold uppercase tracking-widest text-gray-400">Centers</p>
+              <span className="badge badge-neutral">{customer.centers.length}</span>
+            </div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+              {customer.centers.map((c) => (
+                <CenterTag key={c.id} name={c.name} />
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Products & Services */}
+        {customer.customer_services?.length > 0 && (
+          <div className="rounded-xl border border-gray-200 p-5" style={{ background: "var(--surface-2)" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+              <p className="text-xs font-bold uppercase tracking-widest text-gray-400">Products &amp; Services</p>
+              <span className="badge badge-neutral">{customer.customer_services.length}</span>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {customer.customer_services.map((svc) => (
+                <ServiceRow key={svc.id} svc={svc} />
+              ))}
+            </div>
+          </div>
         )}
 
         {customer.notes && (

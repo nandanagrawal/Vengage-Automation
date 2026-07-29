@@ -155,6 +155,7 @@ export type CustomerRow = {
   last_pushed_to_qbo_at: string | null;
   customer_services: CustomerServiceRow[];
   customer_type_ids: number[];
+  centers: CustomerCenterRow[];
 };
 
 export type CustomerTypeRow = {
@@ -176,8 +177,14 @@ export type ServiceCodeRow = {
 export type CustomerServiceRow = {
   id: number;
   product_and_service_id: number;
+  name: string | null;
   rate: string;
   description: string | null;
+};
+
+export type CustomerCenterRow = {
+  id: number;
+  name: string;
 };
 
 export type ProductAndServiceRow = {
@@ -326,6 +333,7 @@ export type RecentInvoiceRow = {
   sent_at: string | null;
   send_status: string;
   file_name: string | null;
+  created_at: string | null;
 };
 
 export type PaginatedInvoices = {

@@ -20,6 +20,8 @@ function invoiceStatusBadge(status: string) {
     return <span className="badge badge-success"><span className="badge-dot badge-dot-success" />Sent</span>;
   if (status === "NeedToSend")
     return <span className="badge badge-warning"><span className="badge-dot badge-dot-warning" />Queued</span>;
+  if (status === "deleted")
+    return <span className="badge badge-error"><span className="badge-dot badge-dot-error" />Deleted</span>;
   return <span className="badge badge-primary"><span className="badge-dot badge-dot-primary" />Created</span>;
 }
 

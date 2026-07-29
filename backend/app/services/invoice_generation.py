@@ -121,6 +121,7 @@ PRODUCT_COLUMN_MAP: dict[str, list[str]] = {
     # "Olivia AI - Walkin Services Call handling B0001" — suffix stripped → matches here (Col V)
     "olivia ai - walkin services call handling": ["walkin booking - telephony channel"],
     "external e-referral charges": ["e-referral greeting sms count (12)"],
+    "total md e-referral": ["one month previous md ereferral count (24)"],
 }
 
 # Difference mappings: quantity = col_a − col_b  (clamped to 0 if negative).

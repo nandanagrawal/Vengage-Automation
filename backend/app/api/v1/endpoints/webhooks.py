@@ -91,6 +91,18 @@ def _upsert_invoice_from_qbo(db: Session, qbo: SupportsQuickBooks, qbo_invoice_i
     db.commit()
 
 
+def _mark_invoice_deleted(db: Session, qbo_invoice_id: str) -> None:
+    existing = (
+        db.query(GeneratedInvoice)
+        .filter(GeneratedInvoice.quickbooks_invoice_id == qbo_invoice_id)
+        .first()
+    )
+    if existing:
+        existing.send_status = "deleted"
+        db.add(existing)
+        db.commit()
+
+
 @router.post("/webhooks/intuit")
 async def intuit_webhook(
     request: Request,
@@ -145,6 +157,9 @@ async def intuit_webhook(
                 processed += 1
             elif name == "invoice" and op in ("create", "update", "emailed"):
                 _upsert_invoice_from_qbo(db, qbo, str(eid))
+                processed += 1
+            elif name == "invoice" and op == "delete":
+                _mark_invoice_deleted(db, str(eid))
                 processed += 1
 
     return {"ok": True, "processed": processed}

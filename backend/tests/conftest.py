@@ -16,7 +16,7 @@ os.close(_fd)
 os.environ["DATABASE_URL"] = f"sqlite:///{_TEST_DB_PATH}"
 os.environ["QBO_ACCESS_TOKEN"] = "test-token"
 os.environ["QBO_REALM_ID"] = "test-realm"
-os.environ["JWT_SECRET"] = "test-secret-for-pytest-only"
+os.environ["JWT_SECRET"] = "test-secret-for-pytest-only-32-chars-min"
 os.environ["INTUIT_WEBHOOK_VERIFIER_TOKEN"] = "test-webhook-token"
 
 _tf = tempfile.NamedTemporaryFile(prefix="vengage-test-qbo-", suffix=".json", delete=False)
@@ -32,14 +32,19 @@ from app.db.session import SessionLocal, init_db  # noqa: E402
 init_db()
 from app.models.center import Center  # noqa: E402
 from app.models.customer import Customer  # noqa: E402
-from app.models.customer_product_and_service import CustomerProductAndService  # noqa: E402
+from app.models.customer_product_and_service import (  # noqa: E402
+    CustomerProductAndService,
+    CustomerProductAndServiceSlab,
+)
 from app.models.customer_type import CustomerType  # noqa: E402
 from app.models.generated_invoice import GeneratedInvoice, GeneratedInvoiceCenter, GeneratedInvoiceLineItem  # noqa: E402
 from app.models.invoice import Invoice  # noqa: E402
 from app.models.invoice_email_activity import InvoiceEmailActivity  # noqa: E402
 from app.models.invoice_upload import InvoiceUpload  # noqa: E402
 from app.models.product_and_service import ProductAndService  # noqa: E402
+from app.models.product_column_mapping import ProductColumnMapping  # noqa: E402
 from app.models.service_code import ServiceCode  # noqa: E402
+from app.models.sheet_column import SheetColumn  # noqa: E402
 from app.models.user import User, UserRole  # noqa: E402
 from app.services.auth_service import create_access_token, hash_password  # noqa: E402
 
@@ -51,6 +56,7 @@ class FakeQBO:
         self.customers: list[dict] = []
         self.invoices: list[dict] = []
         self.items: list[dict] = []
+        self.attachments: list[dict] = []
         self._next_id = 100
 
     def base_url(self) -> str:
@@ -116,6 +122,17 @@ class FakeQBO:
     def query_invoices(self, access_token: str, realm_id: str, start_position: int = 1, max_results: int = 1000) -> list:
         return []
 
+    def attach_to_invoice(
+        self, access_token: str, realm_id: str, invoice_id: str,
+        filename: str, content_type: str, file_bytes: bytes,
+    ) -> dict:
+        record = {
+            "invoice_id": invoice_id, "filename": filename,
+            "content_type": content_type, "size": len(file_bytes),
+        }
+        self.attachments.append(record)
+        return {"AttachableResponse": [{"Attachable": {"Id": str(len(self.attachments))}}]}
+
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -168,7 +185,10 @@ def reset_db():
     db.query(InvoiceUpload).delete()
     db.query(Invoice).delete()
     db.query(InvoiceEmailActivity).delete()
+    db.query(CustomerProductAndServiceSlab).delete()
     db.query(CustomerProductAndService).delete()
+    db.query(ProductColumnMapping).delete()
+    db.query(SheetColumn).delete()
     db.query(ProductAndService).delete()
     db.query(ServiceCode).delete()
     db.query(Center).delete()

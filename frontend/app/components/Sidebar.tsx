@@ -3,8 +3,11 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
+import { useAuth } from "@/lib/useAuth";
 
-const navItems = [
+type NavItem = { href: string; label: string; icon: React.ReactNode; adminOnly?: boolean };
+
+const navItems: NavItem[] = [
   {
     href: "/dashboard",
     label: "Dashboard",
@@ -47,11 +50,25 @@ const navItems = [
       </svg>
     ),
   },
+  {
+    href: "/product-mapping",
+    label: "Product & Service Mapping",
+    adminOnly: true,
+    icon: (
+      <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" viewBox="0 0 24 24">
+        <rect x="3" y="4" width="7" height="16" rx="1.5" />
+        <rect x="14" y="4" width="7" height="7" rx="1.5" />
+        <path strokeLinecap="round" strokeLinejoin="round" d="M17.5 11v4m0 0l-2.5 2.5M17.5 15l2.5 2.5" />
+      </svg>
+    ),
+  },
 ];
 
 export default function Sidebar() {
   const [collapsed, setCollapsed] = useState(false);
   const pathname = usePathname();
+  const { user } = useAuth();
+  const visibleNavItems = navItems.filter((item) => !item.adminOnly || user?.role === "admin");
 
   return (
     <aside className="sidebar" style={{ width: collapsed ? 68 : 240 }}>
@@ -103,7 +120,7 @@ export default function Sidebar() {
 
       {/* Nav */}
       <nav className="sidebar-nav">
-        {navItems.map(({ href, label, icon }) => {
+        {visibleNavItems.map(({ href, label, icon }) => {
           const active = pathname === href || (href !== "/dashboard" && pathname.startsWith(href));
           return (
             <Link

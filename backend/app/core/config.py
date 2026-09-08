@@ -16,6 +16,7 @@ class Settings(BaseSettings):
         "QBO_ACCESS_TOKEN",
         "QBO_REALM_ID",
         "TOKEN_FILE_PATH",
+        "GOOGLE_SERVICE_ACCOUNT_KEY_PATH",
         mode="before",
     )
     @classmethod
@@ -59,6 +60,11 @@ class Settings(BaseSettings):
 
     # Local storage for customer file uploads (mirrored alongside QBO attach API). Relative paths are resolved from the API process working directory.
     CUSTOMER_ATTACHMENTS_DIR: str = "data/customer_attachments"
+
+    # Absolute path to a Google service account JSON key — .env-only, never committed.
+    # Used to read per-center raw-data files from a shared Drive folder and attach them
+    # to the matching QBO invoice. See app/services/gdrive_client.py.
+    GOOGLE_SERVICE_ACCOUNT_KEY_PATH: str | None = None
 
     QBO_ENVIRONMENT: str = "sandbox"
     QBO_MINOR_VERSION: str = "65"

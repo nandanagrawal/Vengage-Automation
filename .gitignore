@@ -3,3 +3,4 @@ tokens.json
 
 # Local customer uploads (created at runtime under API cwd)
 data/customer_attachments/
+backend/gdrive_service_account.json

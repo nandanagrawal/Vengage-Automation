@@ -24,6 +24,7 @@ from app.schemas.invoice_validation import (
 from app.services.invoice_generation import (
     ParsedFile,
     _build_line_items_for_center,
+    _has_valid_pricing,
     _invoice_date,
     _month_label,
     parse_spreadsheet,
@@ -76,6 +77,8 @@ def _run_validation(
         .options(
             selectinload(Customer.customer_services)
             .selectinload(CustomerProductAndService.product_and_service),
+            selectinload(Customer.customer_services)
+            .selectinload(CustomerProductAndService.slabs),
         )
         .all()
     ) if customer_ids else []
@@ -120,7 +123,7 @@ def _run_validation(
             errs.append("No primary email address.")
         active = [
             cs for cs in cust.customer_services
-            if cs.product_and_service.active and cs.rate and cs.rate > 0
+            if cs.product_and_service.active and _has_valid_pricing(cs)
         ]
         if not active:
             errs.append("No active services with valid rates.")
@@ -174,6 +177,47 @@ def validate_file(filename: str, content: bytes, db: Session) -> ValidationRespo
 def revalidate(body: RevalidateRequest, db: Session) -> ValidationResponse:
     rows = [r.model_copy(deep=True) for r in body.rows]
     return _run_validation(rows, body.metric_columns, db)
+
+
+def check_drive_attachments(rows: list[ValidatedRow], drive_folder_url: str, db: Session) -> list[str]:
+    """Pre-flight check for the Preview stage's Drive-folder field: for every
+    customer with add_attachment_in_mail=True, verify every matched center in
+    this batch has a file in the Drive folder. Returns human-readable warning
+    strings — empty means safe to generate (either everything matched, or no
+    customer in this batch requires an attachment)."""
+    from app.services import gdrive_client
+
+    try:
+        folder_id = gdrive_client.extract_folder_id(drive_folder_url)
+        drive_files = gdrive_client.match_center_files(folder_id)
+    except Exception as e:
+        return [f"Could not read Drive folder: {e}"]
+
+    center_ids_lower = [r.center_id.strip().lower() for r in rows if r.center_id.strip() and r.matched]
+    if not center_ids_lower:
+        return []
+
+    centers_in_db: list[Center] = (
+        db.query(Center).filter(sa_func.lower(Center.name).in_(center_ids_lower)).all()
+    )
+    center_by_name: dict[str, Center] = {c.name.lower(): c for c in centers_in_db}
+    customer_ids = {c.company_id for c in centers_in_db}
+    customers: list[Customer] = db.query(Customer).filter(Customer.id.in_(customer_ids)).all()
+    customer_by_id: dict[int, Customer] = {c.id: c for c in customers}
+
+    warnings: list[str] = []
+    for name_lower in center_ids_lower:
+        ctr = center_by_name.get(name_lower)
+        if not ctr:
+            continue
+        customer = customer_by_id.get(ctr.company_id)
+        if not customer or not customer.add_attachment_in_mail:
+            continue
+        if name_lower not in drive_files:
+            warnings.append(
+                f"{customer.display_name} / {ctr.name}: attachment required but no matching file found in the Drive folder."
+            )
+    return warnings
 
 
 def build_preview(body: RevalidateRequest, db: Session) -> PreviewResponse:

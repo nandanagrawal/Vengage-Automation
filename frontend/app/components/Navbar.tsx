@@ -14,6 +14,7 @@ const pageMeta: Record<string, { title: string; subtitle: string }> = {
   "/customers": { title: "Customers",     subtitle: "Manage and review customer records" },
   "/invoices":  { title: "Configuration", subtitle: "Group centers for invoice generation" },
   "/import":    { title: "Import",        subtitle: "Upload and process invoice data" },
+  "/product-mapping": { title: "Product & Service Mapping", subtitle: "Map products to their exact spreadsheet columns" },
   "/settings":  { title: "Settings",      subtitle: "Manage your account and preferences" },
 };
 

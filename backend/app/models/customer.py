@@ -80,6 +80,9 @@ class Customer(Base):
     # App-specific extensions
     add_attachment_in_mail: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
+    # Invoice due date = TxnDate + payment_terms_days, per customer (QBO DueDate field).
+    payment_terms_days: Mapped[int] = mapped_column(Integer, nullable=False, default=15, server_default="15")
+
     last_pushed_to_qbo_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(

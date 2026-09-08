@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import * as XLSX from "xlsx";
 import {
+  apiCheckDriveAttachments,
   apiDelete,
   apiGenerateInvoices,
   apiGet,
@@ -282,6 +283,9 @@ function PreviewStage({
   const [rows, setRows] = useState<ValidatedRow[]>(() => validatedRows.map(r => ({ ...r, metrics: { ...r.metrics } })));
   const [isDirty, setIsDirty] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
+  const [driveUrl, setDriveUrl] = useState("");
+  const [checkingAttachments, setCheckingAttachments] = useState(false);
+  const [missingAttachmentWarnings, setMissingAttachmentWarnings] = useState<string[] | null>(null);
 
   const cols = preview.metric_columns;
 
@@ -301,11 +305,44 @@ function PreviewStage({
     setIsDirty(true);
   };
 
-  const handleSubmitClick = () => {
-    if (isDirty) { setShowConfirm(true); } else { onSubmit({ metric_columns: cols, rows }); }
+  const buildRequest = (): GenerateRequest => ({
+    metric_columns: cols,
+    rows,
+    drive_folder_url: driveUrl.trim() || undefined,
+  });
+
+  // Runs after any "isDirty" confirmation: if a Drive folder is set, check for
+  // customers that require an attachment but have no matching file there —
+  // warn and let the user decide before invoices actually get created.
+  const proceedPastAttachmentCheck = async () => {
+    const url = driveUrl.trim();
+    if (!url) { onSubmit(buildRequest()); return; }
+    setCheckingAttachments(true);
+    try {
+      const res = await apiCheckDriveAttachments(cols, rows, url);
+      if (res.warnings.length > 0) {
+        setMissingAttachmentWarnings(res.warnings);
+        return;
+      }
+    } catch {
+      // Check itself failed (e.g. bad link) — don't block submission on it;
+      // the same problem will surface as a warning after generation anyway.
+    } finally {
+      setCheckingAttachments(false);
+    }
+    onSubmit(buildRequest());
   };
 
-  const confirmSubmit = () => { setShowConfirm(false); onSubmit({ metric_columns: cols, rows }); };
+  const handleSubmitClick = () => {
+    if (isDirty) { setShowConfirm(true); } else { void proceedPastAttachmentCheck(); }
+  };
+
+  const confirmSubmit = () => { setShowConfirm(false); void proceedPastAttachmentCheck(); };
+
+  const proceedDespiteMissingAttachments = () => {
+    setMissingAttachmentWarnings(null);
+    onSubmit(buildRequest());
+  };
 
   // row lookup by center_id lower
   const rowByCenterId = Object.fromEntries(rows.map(r => [r.center_id.toLowerCase(), r]));
@@ -441,6 +478,27 @@ function PreviewStage({
         </div>
       )}
 
+      {/* Missing-attachment warning modal */}
+      {missingAttachmentWarnings && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm">
+          <div className="w-full max-w-lg rounded-2xl border border-gray-200 p-6 space-y-4 shadow-2xl" style={{ background: "var(--surface-2)" }}>
+            <h3 className="text-base font-bold text-gray-900">Missing attachments</h3>
+            <p className="text-sm text-gray-500">
+              These customers have &quot;Add attachment in mail&quot; enabled, but no matching file was found in the Drive folder for one or more of their centres. Their invoices will still be created — just without that attachment.
+            </p>
+            <ul className="space-y-1 max-h-56 overflow-y-auto">
+              {missingAttachmentWarnings.map((w, i) => (
+                <li key={i} className="text-xs text-amber-700/90 rounded-lg bg-amber-500/5 border border-amber-200 px-3 py-2">{w}</li>
+              ))}
+            </ul>
+            <div className="flex gap-3 justify-end">
+              <button type="button" onClick={() => setMissingAttachmentWarnings(null)} className="px-4 py-2 rounded-xl text-gray-500 hover:text-gray-900 border border-gray-200 text-sm transition-colors">Go back</button>
+              <button type="button" onClick={proceedDespiteMissingAttachments} className="shimmer-btn px-4 py-2 rounded-xl text-gray-900 text-sm font-semibold">Generate anyway</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-sm font-semibold text-gray-900">Preview</h2>
@@ -452,10 +510,31 @@ function PreviewStage({
             <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={1.8} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 10l5 5m0 0l5-5m-5 5V3" /></svg>
             Download
           </button>
-          <button type="button" onClick={handleSubmitClick} className="shimmer-btn px-5 py-2.5 rounded-xl text-gray-900 text-sm font-semibold">
-            {isDirty ? "Submit with changes" : "Submit invoices"}
+          <button
+            type="button"
+            onClick={handleSubmitClick}
+            disabled={checkingAttachments}
+            className="shimmer-btn px-5 py-2.5 rounded-xl text-gray-900 text-sm font-semibold disabled:opacity-60 disabled:cursor-not-allowed"
+          >
+            {checkingAttachments ? "Checking attachments…" : isDirty ? "Submit with changes" : "Submit invoices"}
           </button>
         </div>
+      </div>
+
+      <div>
+        <label className="block text-[11px] font-semibold uppercase tracking-wide text-gray-400 mb-1">
+          Raw data folder link (optional)
+        </label>
+        <input
+          type="text"
+          value={driveUrl}
+          onChange={(e) => setDriveUrl(e.target.value)}
+          placeholder="Google Drive folder link with each centre's raw-data file…"
+          className="w-full rounded-lg bg-gray-50 border border-gray-200 px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-200"
+        />
+        <p className="text-[11px] text-gray-400 mt-1">
+          When set, each matched centre's file (by file name, e.g. &quot;VNG-IMG-60.xlsx&quot;) is attached to its invoice in QuickBooks.
+        </p>
       </div>
 
       {preview.warnings.length > 0 && (

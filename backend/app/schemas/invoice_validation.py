@@ -65,3 +65,19 @@ class PreviewResponse(BaseModel):
 class GenerateRequest(BaseModel):
     metric_columns: list[str]
     rows: list[ValidatedRow]
+    # Optional Drive folder link holding per-center raw-data files (e.g.
+    # "VNG-IMG-60.xlsx") — each matched center's file is attached to its
+    # QBO invoice. See app/services/gdrive_client.py.
+    drive_folder_url: str | None = None
+
+
+class DriveAttachmentCheckRequest(BaseModel):
+    metric_columns: list[str]
+    rows: list[ValidatedRow]
+    drive_folder_url: str
+
+
+class DriveAttachmentCheckResponse(BaseModel):
+    # One entry per customer/center that has add_attachment_in_mail=True but
+    # no matching file in the Drive folder. Empty = safe to generate.
+    warnings: list[str] = []

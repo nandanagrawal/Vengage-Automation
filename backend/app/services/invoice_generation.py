@@ -18,10 +18,12 @@ database.  Rows whose col-0 value does not match any Center are skipped
 
 Product → column mapping
 ------------------------
-PRODUCT_COLUMN_MAP maps each ProductAndService name (lower-case) to one or
-more column-header substrings.  The line-item quantity is the sum of all
-matching column values for that center's row.  Products whose name is in
-FIXED_QUANTITY_PRODUCTS always receive quantity = 1.
+Quantity is resolved solely via ProductColumnMapping (admin-configured, see
+the Product & Service Mapping page / SheetColumn catalog): an exact
+(case-insensitive, trimmed) match between a product's mapped column and a
+header in the uploaded file. A product with no mapping configured produces
+no line item at all — nothing is summed, diffed, defaulted to a fixed
+quantity, or guessed by name.
 
 Invoice grouping
 ----------------
@@ -37,7 +39,8 @@ Invoice fields
   DueDate               : TxnDate + 15 days
   Memo (CustomerMemo)   : "{MMMYY} Invoice"  e.g. "MAR26 Invoice"
   Rate                  : CustomerProductAndService.rate  (per-customer, per-product)
-  ItemDescription       : "{center_prefix} - {MMMYY} Invoice month {service_code}"
+  ItemDescription       : "{Center Name} for {Mon} {YY}"  e.g. "Rockingham Radiology for Aug 26"
+                           (slab tiers: "{Center Name} – {range} Booking for {Mon} {YY}")
   0-quantity items      : included (amount = 0)
 """
 
@@ -58,7 +61,7 @@ from sqlalchemy.orm import Session, selectinload
 from app.core.config import settings
 from app.models.center import Center
 from app.models.customer import Customer
-from app.models.customer_product_and_service import CustomerProductAndService
+from app.models.customer_product_and_service import CustomerProductAndService, PricingType
 from app.models.generated_invoice import (
     GeneratedInvoice,
     GeneratedInvoiceCenter,
@@ -66,6 +69,8 @@ from app.models.generated_invoice import (
 )
 from app.models.invoice import Invoice
 from app.models.product_and_service import ProductAndService
+from app.models.product_column_mapping import ProductColumnMapping
+from app.services import gdrive_client
 from app.services.qbo_client import SupportsQuickBooks
 
 # Module-level cache: maps "realm_id:code_name" → resolved QBO TaxCode Id
@@ -95,52 +100,6 @@ def _resolve_tax_code_id(qbo: SupportsQuickBooks, token: str, realm: str, code: 
     return code
 
 
-# ── Product → metric-column mapping ──────────────────────────────────────────
-#
-# Keys   : ProductAndService.name lowercased (partial or full match via `in`)
-# Values : list of column-header substrings (lowercased); the quantity is the
-#          sum of all columns whose lowercased header contains one of these substrings.
-#
-# Multi-column entries (e.g. Call Forwarding) are summed together.
-
-PRODUCT_COLUMN_MAP: dict[str, list[str]] = {
-    "olivia ai bookings for imaging workflow": ["confirmed appointment (4)"],
-    "olivia ai - provisional bookings for imaging workflow": ["provisional appointment (5)"],
-    "direct calls handling charges": ["direct call (6)"],
-    "e-referral transmission charges": ["total e-referrals (11)"],
-    "e-referral manual sms charges": ["e-referral manual sms count (13)"],
-    "bookings via specialist portal": ["specialist's reception (15)"],
-    "e-referral greeting sms charges": ["e-referral greeting sms count (12)"],
-    # "Bookings directly done by customer team B0001" — suffix stripped → matches here (Col N)
-    "bookings directly done by customer team": ["appointments by customer reception"],
-    "misc item": ["sms count (chat) (16)"],
-    "call forwarding - telephony charges": [
-        "voice call forwarding bh (mins) (9)",
-        "voice call forwarding ooh (mins) (10)",
-    ],
-    # "Olivia AI - Walkin Services Call handling B0001" — suffix stripped → matches here (Col V)
-    "olivia ai - walkin services call handling": ["walkin booking - telephony channel"],
-    "external e-referral charges": ["e-referral greeting sms count (12)"],
-    "total md e-referral": ["one month previous md ereferral count (24)"],
-}
-
-# Difference mappings: quantity = col_a − col_b  (clamped to 0 if negative).
-# Key = product base name (lower-case, no suffix).
-# Value = (minuend column substring, subtrahend column substring).
-PRODUCT_COLUMN_DIFF_MAP: dict[str, tuple[str, str]] = {
-    # "Internal E-Referral Charges B0003" → Col K − Col L
-    #   = Total E-referrals (11) − E-referral Greeting SMS Count (12)
-    "internal e-referral charges": (
-        "total e-referrals (11)",
-        "e-referral greeting sms count (12)",
-    ),
-}
-
-# Products that always have quantity = 1 regardless of file data
-FIXED_QUANTITY_PRODUCTS: frozenset[str] = frozenset({
-    "kiosk monthly usage and support charges",
-    "e-referral portal monthly subscription fees",
-})
 
 
 # ── Parsing ───────────────────────────────────────────────────────────────────
@@ -300,8 +259,8 @@ def _invoice_date() -> date:
     return last_month_last_day
 
 
-def _due_date(inv_date: date) -> date:
-    return inv_date + timedelta(days=15)
+def _due_date(inv_date: date, payment_terms_days: int = 15) -> date:
+    return inv_date + timedelta(days=payment_terms_days)
 
 
 def _memo(inv_date: date) -> str:
@@ -320,8 +279,8 @@ def _month_label(inv_date: date) -> str:
 
 
 def _desc_month_year(inv_date: date) -> str:
-    """e.g. 'June 2026' — used in line-item descriptions."""
-    return inv_date.strftime("%B %Y")
+    """e.g. 'Aug 26' — used in line-item descriptions."""
+    return inv_date.strftime("%b %y")
 
 
 def _memo_on_statement(inv_date: date) -> str:
@@ -332,81 +291,39 @@ def _memo_on_statement(inv_date: date) -> str:
 # ── Slab pricing helpers ──────────────────────────────────────────────────────
 
 # Matches "(Slab-1)", "(Slab-2b)", "(slab_3a)" etc. anywhere in the name.
+# Legacy convention — slab tiers now live on CustomerProductAndServiceSlab rows
+# instead of separate QBO products, but this stays as defensive normalization
+# for any product name that still carries the suffix.
 _SLAB_SUFFIX_RE = re.compile(r"\s*\(\s*slab[-_]?\s*\d+[a-z]*\s*\)", re.IGNORECASE)
 # Matches trailing service-code tokens like "B0001", "B0002", "B0003".
 _SERVICE_CODE_RE = re.compile(r"\s+b\d{4}\s*$", re.IGNORECASE)
+
+
+def _slab_range_desc(start: int, end: int | None) -> str:
+    """Format a slab's range for the QBO line-item description.
+
+    e.g. (1, 1000) → "1-1000", (2501, None) → "2501+" (open-ended top tier).
+    """
+    return f"{start}-{end}" if end is not None else f"{start}+"
+
+
 # Bounded range: "1-1000", "1001-2500" (en-dash or hyphen).
 _RANGE_BOUNDED_RE = re.compile(r"(\d[\d,]*)\s*[-–]\s*(\d[\d,]*)")
 # Unbounded range: "2501+" or "2501 +".
 _RANGE_UNBOUNDED_RE = re.compile(r"(\d[\d,]*)\s*\+")
 
 
-def _get_col_substrings(product_name_lower: str) -> list[str] | None:
-    """Return PRODUCT_COLUMN_MAP column-substrings for a product name.
-
-    Tries four normalizations in order so that products whose names include
-    a slab suffix ("(Slab-1b)") and/or a service-code suffix ("B0001") still
-    resolve to the correct column mapping:
-
-      1. Exact name (no transformation)
-      2. Strip service-code suffix
-      3. Strip slab suffix
-      4. Strip both slab and service-code suffixes
-    """
-    if product_name_lower in PRODUCT_COLUMN_MAP:
-        return PRODUCT_COLUMN_MAP[product_name_lower]
-
-    no_code = _SERVICE_CODE_RE.sub("", product_name_lower).strip()
-    if no_code != product_name_lower and no_code in PRODUCT_COLUMN_MAP:
-        return PRODUCT_COLUMN_MAP[no_code]
-
-    no_slab = _SLAB_SUFFIX_RE.sub("", product_name_lower).strip()
-    if no_slab != product_name_lower and no_slab in PRODUCT_COLUMN_MAP:
-        return PRODUCT_COLUMN_MAP[no_slab]
-
-    no_both = _SERVICE_CODE_RE.sub("", no_slab).strip()
-    if no_both != product_name_lower and no_both in PRODUCT_COLUMN_MAP:
-        return PRODUCT_COLUMN_MAP[no_both]
-
-    return None
-
-
-def _get_col_diff(product_name_lower: str) -> tuple[str, str] | None:
-    """Return (minuend_substr, subtrahend_substr) for difference-based products.
-
-    Applies the same four-step normalization as _get_col_substrings so that
-    service-code and slab suffixes are handled automatically.
-    """
-    if product_name_lower in PRODUCT_COLUMN_DIFF_MAP:
-        return PRODUCT_COLUMN_DIFF_MAP[product_name_lower]
-
-    no_code = _SERVICE_CODE_RE.sub("", product_name_lower).strip()
-    if no_code != product_name_lower and no_code in PRODUCT_COLUMN_DIFF_MAP:
-        return PRODUCT_COLUMN_DIFF_MAP[no_code]
-
-    no_slab = _SLAB_SUFFIX_RE.sub("", product_name_lower).strip()
-    if no_slab != product_name_lower and no_slab in PRODUCT_COLUMN_DIFF_MAP:
-        return PRODUCT_COLUMN_DIFF_MAP[no_slab]
-
-    no_both = _SERVICE_CODE_RE.sub("", no_slab).strip()
-    if no_both != product_name_lower and no_both in PRODUCT_COLUMN_DIFF_MAP:
-        return PRODUCT_COLUMN_DIFF_MAP[no_both]
-
-    return None
-
-
 def _parse_slab_range(description: str | None) -> tuple[int, int | None] | None:
     """Parse a numeric range from a ProductAndService description.
+
+    Not used by the live invoice-generation flow anymore (slabs now carry an
+    explicit range on CustomerProductAndServiceSlab) — kept for
+    scripts/migrate_slab_customers.py, which still has to make sense of the
+    old "1-1000 bookings slab" free-text convention on legacy QBO products.
 
     Returns ``(start, end)`` for bounded ranges (e.g. "1-1000" → (1, 1000))
     or ``(start, None)`` for unbounded ranges (e.g. "2501+" → (2501, None)).
     Returns ``None`` when no recognisable range is found.
-
-    Handles:
-      - "1-1000 bookings slab"
-      - "1001–2500"   (en-dash)
-      - "2501+ bookings"
-      - "2,501+"      (comma-grouped numbers)
     """
     if not description:
         return None
@@ -447,51 +364,53 @@ def _slab_qty(total: Decimal, start: int, end: int | None) -> Decimal:
 # ── Quantity lookup ───────────────────────────────────────────────────────────
 
 def _normalize_product_name(name_lower: str) -> str:
-    """Strip slab suffix and service-code suffix for map/set lookups."""
+    """Strip slab suffix and service-code suffix off a product name.
+
+    Not used by the live invoice-generation flow anymore (quantity lookup is
+    dynamic-column-only now) — kept for scripts/migrate_slab_customers.py,
+    which still has to recognize the old "(Slab-1) B0001"-suffixed QBO
+    product-naming convention.
+    """
     no_slab = _SLAB_SUFFIX_RE.sub("", name_lower).strip()
     return _SERVICE_CODE_RE.sub("", no_slab).strip()
 
 
-def _is_fixed_quantity(name_lower: str) -> bool:
-    """Return True if this product (with or without suffix) is a fixed-qty product."""
-    return name_lower in FIXED_QUANTITY_PRODUCTS or _normalize_product_name(name_lower) in FIXED_QUANTITY_PRODUCTS
+def _has_valid_pricing(cs: CustomerProductAndService) -> bool:
+    """True if this mapping has a usable rate — a positive flat rate, or at
+    least one slab tier with a positive rate."""
+    if cs.pricing_type == PricingType.slab:
+        return any(slab.rate is not None and slab.rate > 0 for slab in cs.slabs)
+    return cs.rate is not None and cs.rate > 0
+
+
+def _load_dynamic_columns(db: Session) -> dict[int, str]:
+    """product_and_service_id -> admin-configured exact column header.
+
+    Small table, loaded whole rather than filtered by product ids — cheap,
+    and avoids passing a product-id set through every call site.
+    """
+    return {
+        row.product_and_service_id: row.sheet_column.name
+        for row in db.query(ProductColumnMapping).options(selectinload(ProductColumnMapping.sheet_column)).all()
+    }
 
 
 def _get_quantity(
-    product_name_lower: str,
     center_metrics: dict[str, Decimal],
+    dynamic_column: str | None,
 ) -> Decimal | None:
     """Look up quantity for a product from a center's metric row.
 
-    Returns None if there is no mapping at all (product should be skipped).
-    Returns Decimal (possibly 0) when a mapping exists but has zero value.
+    Quantity comes solely from the admin-configured ProductColumnMapping
+    (`dynamic_column`) — an exact (case-insensitive, trimmed) match against a
+    column header in the uploaded file. No summing, no diffing, no fixed
+    quantities, no name-based guessing: a product with no mapping configured,
+    or whose configured column isn't present in this file, is skipped.
     """
-    if _is_fixed_quantity(product_name_lower):
-        return Decimal("1")
-
-    diff_pair = _get_col_diff(product_name_lower)
-    if diff_pair is not None:
-        minuend_sub, subtrahend_sub = diff_pair
-        minuend = sum((v for col, v in center_metrics.items() if minuend_sub in col), Decimal("0"))
-        subtrahend = sum((v for col, v in center_metrics.items() if subtrahend_sub in col), Decimal("0"))
-        return max(Decimal("0"), minuend - subtrahend)
-
-    col_substrings = _get_col_substrings(product_name_lower)
-    if col_substrings:
-        total = Decimal("0")
-        for substr in col_substrings:
-            for col_lower, val in center_metrics.items():
-                if substr in col_lower:
-                    total += val
-        return total
-
-    # Fallback: column header contains the product name as a substring.
-    # Allows custom/future products and test data to work without an explicit entry.
-    for col_lower, val in center_metrics.items():
-        if product_name_lower in col_lower:
-            return val
-
-    return None  # no mapping → line item skipped
+    if dynamic_column is None:
+        return None
+    target = dynamic_column.strip().lower()
+    return center_metrics.get(target)  # None if the exact column isn't in this row
 
 
 # ── Invoice generation ────────────────────────────────────────────────────────
@@ -564,41 +483,36 @@ def _build_line_items_for_center(
     desc_month_year: str,
     service_date: date,
     tax_code_id: str = "",
+    dynamic_columns: dict[int, str] | None = None,
 ) -> list[_LineItem]:
     """Build _LineItem objects for one center, supporting slab-based pricing.
 
-    Slab logic
-    ----------
-    When a customer has multiple services that all map to the **same metric
-    column** (e.g. "Confirmed Appointment") AND every one of those services
-    has a parseable numeric range in its ProductAndService.description (e.g.
-    "1-1000", "1001-2500", "2501+"), the total column value is *distributed*
-    across the slabs rather than duplicated:
-
-      total=2755, slabs (1-1000), (1001-2500), (2501+)
-        → slab-1 qty=1000, slab-2 qty=1500, slab-3 qty=255
-
-    If only some services have parseable ranges, or the group has just one
-    service, each service independently receives the full column value.
+    Each CustomerProductAndService is either:
+      - flat: one line item at `cs.rate`, quantity = the full metric total.
+      - slab: quantity is *distributed* across `cs.slabs` (sorted by
+        range_start), one line item per tier at that tier's own rate. E.g.
+        total=2755, slabs (1-1000), (1001-2500), (2501+)
+          → slab-1 qty=1000, slab-2 qty=1500, slab-3 qty=255
 
     Line items with zero quantity or zero rate are excluded from the output.
     """
     col_b = center_name.strip()
 
     def _standard_desc() -> str:
-        """Column B value; falls back to empty string if absent."""
-        return col_b
+        """"{Center Name} for {Mon} {YY}", e.g. "Rockingham Radiology for Aug 26"."""
+        if col_b and desc_month_year:
+            return f"{col_b} for {desc_month_year}"
+        return col_b or desc_month_year
 
-    def _slab_desc(ps_description: str | None) -> str:
-        """Column B – slab description Booking, with fallbacks for missing halves."""
-        slab_part = (ps_description or "").strip()
-        if col_b and slab_part:
-            return f"{col_b} – {slab_part} Booking"
-        return col_b or slab_part
+    def _slab_desc(range_text: str) -> str:
+        """"{Center Name} – {range} Booking for {Mon} {YY}", with fallbacks for missing parts."""
+        base = f"{col_b} – {range_text} Booking" if col_b and range_text else (col_b or range_text)
+        if base and desc_month_year:
+            return f"{base} for {desc_month_year}"
+        return base or desc_month_year
 
-    def _make_item(cs: CustomerProductAndService, qty: Decimal, description: str) -> _LineItem:
+    def _make_item(cs: CustomerProductAndService, qty: Decimal, rate: Decimal, description: str) -> _LineItem:
         ps = cs.product_and_service
-        rate = cs.rate
         amount = (qty * rate).quantize(Decimal("0.01"))
         qty_f = float(qty)
         rate_f = float(rate)
@@ -628,90 +542,27 @@ def _build_line_items_for_center(
             qbo_payload=qbo_payload,
         )
 
-    # ── 1. Group services by which metric column they read from ───────────────
-    # key → sorted join of column substrings (or special prefix for fixed/fallback)
-    col_groups: dict[str, list[CustomerProductAndService]] = {}
+    items: list[_LineItem] = []
+    dynamic_columns = dynamic_columns or {}
 
     for cs in customer_services:
         ps = cs.product_and_service
-        if cs.rate is None or cs.rate <= 0:
-            continue
-        name_lower = ps.name.lower()
+        dynamic_column = dynamic_columns.get(cs.product_and_service_id)
+        raw_total = _get_quantity(center_metrics, dynamic_column)
+        if raw_total is None:
+            continue  # product has no column mapping → skipped
 
-        if _is_fixed_quantity(name_lower):
-            col_groups.setdefault("__fixed__", []).append(cs)
-            continue
-
-        diff_pair = _get_col_diff(name_lower)
-        if diff_pair is not None:
-            # Encode both column substrings into the key so each unique pair
-            # gets its own group and the raw-total phase can recover them.
-            key = f"__diff__{diff_pair[0]}||{diff_pair[1]}"
-            col_groups.setdefault(key, []).append(cs)
-            continue
-
-        col_subs = _get_col_substrings(name_lower)
-        if col_subs is not None:
-            key = "|".join(sorted(col_subs))
-            col_groups.setdefault(key, []).append(cs)
+        if cs.pricing_type == PricingType.slab:
+            for slab in sorted(cs.slabs, key=lambda s: s.range_start):
+                if slab.rate is None or slab.rate <= 0:
+                    continue
+                qty = _slab_qty(raw_total, slab.range_start, slab.range_end)
+                range_text = _slab_range_desc(slab.range_start, slab.range_end)
+                items.append(_make_item(cs, qty, slab.rate, _slab_desc(range_text)))
         else:
-            # Fallback: col header contains the product name
-            for col_lower in center_metrics:
-                if name_lower in col_lower:
-                    col_groups.setdefault(f"__fb__{name_lower}", []).append(cs)
-                    break
-            # If still no match, product has no column mapping → skipped
-
-    # ── 2. Build line items per group ─────────────────────────────────────────
-    items: list[_LineItem] = []
-
-    for key, group in col_groups.items():
-        # Resolve raw total for this column group
-        if key == "__fixed__":
-            raw_total = Decimal("1")
-        elif key.startswith("__diff__"):
-            minuend_sub, subtrahend_sub = key[len("__diff__"):].split("||")
-            minuend = sum(
-                (v for col, v in center_metrics.items() if minuend_sub in col),
-                Decimal("0"),
-            )
-            subtrahend = sum(
-                (v for col, v in center_metrics.items() if subtrahend_sub in col),
-                Decimal("0"),
-            )
-            raw_total = max(Decimal("0"), minuend - subtrahend)
-        elif key.startswith("__fb__"):
-            pname = key[len("__fb__"):]
-            raw_total = sum(
-                (v for col, v in center_metrics.items() if pname in col),
-                Decimal("0"),
-            )
-        else:
-            col_subs = key.split("|")
-            raw_total = Decimal("0")
-            for substr in col_subs:
-                for col_lower, val in center_metrics.items():
-                    if substr in col_lower:
-                        raw_total += val
-
-        # Check for slab group: ≥2 services that ALL have parseable description ranges
-        if len(group) > 1:
-            slab_pairs = [
-                (cs, _parse_slab_range(cs.product_and_service.description))
-                for cs in group
-            ]
-            if all(r is not None for _, r in slab_pairs):
-                # Full slab mode: sort by range start and distribute total
-                slab_pairs.sort(key=lambda x: x[1][0])  # type: ignore[index]
-                for cs, (start, end) in slab_pairs:  # type: ignore[misc]
-                    qty = _slab_qty(raw_total, start, end)
-                    items.append(_make_item(cs, qty, _slab_desc(cs.product_and_service.description)))
+            if cs.rate is None or cs.rate <= 0:
                 continue
-            # Partial or no parseable ranges → fall through to full-qty mode
-
-        # Non-slab (or partial ranges): each service gets the full raw total
-        for cs in group:
-            items.append(_make_item(cs, raw_total, _standard_desc()))
+            items.append(_make_item(cs, raw_total, cs.rate, _standard_desc()))
 
     return [li for li in items if li.quantity > 0 and li.rate > 0]
 
@@ -724,9 +575,10 @@ def _build_qbo_invoice_payload(
     customer_services: list[CustomerProductAndService],
     inv_date: date,
     tax_code_id: str = "",
+    dynamic_columns: dict[int, str] | None = None,
 ) -> tuple[dict[str, Any], Decimal, list[_LineItem]] | None:
     """Build the QBO invoice payload with per-center line items."""
-    due = _due_date(inv_date)
+    due = _due_date(inv_date, customer.payment_terms_days)
     memo = _memo(inv_date)
     memo_stmt = _memo_on_statement(inv_date)
     dmyear = _desc_month_year(inv_date)
@@ -750,6 +602,7 @@ def _build_qbo_invoice_payload(
             desc_month_year=dmyear,
             service_date=inv_date,
             tax_code_id=tax_code_id,
+            dynamic_columns=dynamic_columns,
         )
         all_line_items.extend(items)
 
@@ -785,9 +638,20 @@ def generate_invoices_from_parsed(
     realm_id: str,
     parsed: ParsedFile,
     invoice_upload_id: int | None = None,
+    drive_folder_url: str | None = None,
 ) -> GenerationResult:
     """Run invoice generation from a pre-built ParsedFile (skips file parsing)."""
     result = GenerationResult()
+
+    # Resolve the Drive folder once for the whole run (not per-invoice) — a
+    # bad link/no access is reported but never blocks invoice creation.
+    drive_files: dict[str, dict] | None = None
+    if drive_folder_url:
+        try:
+            folder_id = gdrive_client.extract_folder_id(drive_folder_url)
+            drive_files = gdrive_client.match_center_files(folder_id)
+        except Exception as e:  # noqa: BLE001 — Drive access issues must not block generation
+            result.errors.append(f"Could not read Drive folder for attachments: {e}")
 
     # Resolve the configured tax code name (e.g. "GST") to its QBO Id (e.g. "5").
     # Australian QBO requires the numeric Id, not the name string.
@@ -827,10 +691,13 @@ def generate_invoices_from_parsed(
         .options(
             selectinload(Customer.customer_services)
             .selectinload(CustomerProductAndService.product_and_service),
+            selectinload(Customer.customer_services)
+            .selectinload(CustomerProductAndService.slabs),
         )
         .all()
     )
     customer_by_id: dict[int, Customer] = {c.id: c for c in customers}
+    dynamic_columns = _load_dynamic_columns(db)
 
     invoices: list[Invoice] = (
         db.query(Invoice)
@@ -860,7 +727,7 @@ def generate_invoices_from_parsed(
 
         active_services = [
             cs for cs in customer.customer_services
-            if cs.product_and_service.active and cs.rate and cs.rate > 0
+            if cs.product_and_service.active and _has_valid_pricing(cs)
         ]
         if not active_services:
             result.errors.append(
@@ -896,6 +763,8 @@ def generate_invoices_from_parsed(
                     result=result, is_standalone=True,
                     invoice_upload_id=invoice_upload_id,
                     tax_code_id=tax_code_id,
+                    dynamic_columns=dynamic_columns,
+                    drive_files=drive_files,
                 )
             else:
                 _create_and_send(
@@ -906,6 +775,8 @@ def generate_invoices_from_parsed(
                     result=result, is_standalone=False,
                     invoice_upload_id=invoice_upload_id,
                     tax_code_id=tax_code_id,
+                    dynamic_columns=dynamic_columns,
+                    drive_files=drive_files,
                 )
 
     return result
@@ -919,6 +790,7 @@ def generate_invoices(
     filename: str,
     content: bytes,
     invoice_upload_id: int | None = None,
+    drive_folder_url: str | None = None,
 ) -> GenerationResult:
     result = GenerationResult()
 
@@ -927,7 +799,39 @@ def generate_invoices(
     return generate_invoices_from_parsed(
         db=db, qbo=qbo, access_token=access_token, realm_id=realm_id,
         parsed=parsed, invoice_upload_id=invoice_upload_id,
+        drive_folder_url=drive_folder_url,
     )
+
+
+def _attach_center_files(
+    qbo: SupportsQuickBooks,
+    access_token: str,
+    realm_id: str,
+    inv_id: str,
+    customer_name: str,
+    center_names: list[str],
+    drive_files: dict[str, dict],
+    result: GenerationResult,
+) -> None:
+    """Attach each matched center's Drive file to the already-created invoice.
+    Never raises — a missing match or a download/attach failure is recorded
+    as a warning on `result` and the rest of the centers are still tried; the
+    invoice itself has already been created successfully by this point."""
+    for name in center_names:
+        f = drive_files.get(name.strip().lower())
+        if f is None:
+            result.errors.append(
+                f"Customer '{customer_name}' / {name}: no matching Drive file — "
+                "invoice created without attachment."
+            )
+            continue
+        try:
+            content, content_type = gdrive_client.download_file(f["id"], f.get("mimeType", ""))
+            qbo.attach_to_invoice(access_token, realm_id, inv_id, f["name"], content_type, content)
+        except Exception as e:  # noqa: BLE001 — one bad attachment must not fail the invoice
+            result.errors.append(
+                f"Customer '{customer_name}' / {name}: failed to attach Drive file — {e}"
+            )
 
 
 def _create_and_send(
@@ -945,6 +849,8 @@ def _create_and_send(
     is_standalone: bool,
     invoice_upload_id: int | None = None,
     tax_code_id: str = "",
+    dynamic_columns: dict[int, str] | None = None,
+    drive_files: dict[str, dict] | None = None,
 ) -> None:
     if is_standalone and len(center_names) == 1:
         label = f"{center_names[0]} (standalone)"
@@ -958,6 +864,7 @@ def _create_and_send(
         customer_services=customer_services,
         inv_date=inv_date,
         tax_code_id=tax_code_id,
+        dynamic_columns=dynamic_columns,
     )
     if built is None:
         result.errors.append(
@@ -971,6 +878,13 @@ def _create_and_send(
         qbo_inv = qbo.create_invoice(access_token, realm_id, payload)
         inv_id = str(qbo_inv.get("Id", ""))
         inv_number: str | None = qbo_inv.get("DocNumber") or None
+
+        if drive_files is not None and inv_id and customer.add_attachment_in_mail:
+            _attach_center_files(
+                qbo=qbo, access_token=access_token, realm_id=realm_id,
+                inv_id=inv_id, customer_name=customer.display_name,
+                center_names=center_names, drive_files=drive_files, result=result,
+            )
 
         gen_inv_id: int | None = None
         if invoice_upload_id is not None and inv_id:
@@ -1077,10 +991,13 @@ def build_line_item_preview(body: "RevalidateRequest", db: Session) -> dict:
         .options(
             selectinload(Customer.customer_services)
             .selectinload(CustomerProductAndService.product_and_service),
+            selectinload(Customer.customer_services)
+            .selectinload(CustomerProductAndService.slabs),
         )
         .all()
     )
     customer_by_id: dict[int, Customer] = {c.id: c for c in customers}
+    dynamic_columns = _load_dynamic_columns(db)
 
     invoices: list[Invoice] = (
         db.query(Invoice)
@@ -1106,7 +1023,7 @@ def build_line_item_preview(body: "RevalidateRequest", db: Session) -> dict:
 
         active_services = [
             cs for cs in customer.customer_services
-            if cs.product_and_service.active and cs.rate and cs.rate > 0
+            if cs.product_and_service.active and _has_valid_pricing(cs)
         ]
         if not active_services:
             continue
@@ -1136,6 +1053,7 @@ def build_line_item_preview(body: "RevalidateRequest", db: Session) -> dict:
                     customer_services=active_services,
                     desc_month_year=dmyear,
                     service_date=inv_date,
+                    dynamic_columns=dynamic_columns,
                 )
                 for li in items:
                     tax_amount = (li.amount * Decimal("0.1")).quantize(Decimal("0.0001"))
@@ -1154,13 +1072,16 @@ def build_line_item_preview(body: "RevalidateRequest", db: Session) -> dict:
                 result_invoices.append({
                     "invoice_no": last_invoice_no_int + inv_offset,
                     "customer_display_name": customer.display_name,
+                    # Per-customer due date — matches what actually gets sent to
+                    # QBO on generate, in case it differs from the default below.
+                    "due_date": _due_date(inv_date, customer.payment_terms_days).strftime("%d/%m/%Y"),
                     "line_items": line_items,
                 })
 
     return {
         "last_invoice_no": last_invoice_no_str,
         "invoice_date": inv_date.strftime("%d/%m/%Y"),
-        "due_date": due.strftime("%d/%m/%Y"),
+        "due_date": due.strftime("%d/%m/%Y"),  # default (15-day) term — see each invoice's own due_date for the actual value
         "memo": memo,
         "invoices": result_invoices,
     }

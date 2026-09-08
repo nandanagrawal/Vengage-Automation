@@ -5,7 +5,11 @@ from __future__ import annotations
 from sqlalchemy.orm import Session
 
 from app.models.customer import Customer, CustomerStatus
-from app.models.customer_product_and_service import CustomerProductAndService
+from app.models.customer_product_and_service import (
+    CustomerProductAndService,
+    CustomerProductAndServiceSlab,
+    PricingType,
+)
 from app.models.customer_type import CustomerType
 from app.models.product_and_service import ProductAndService
 from app.schemas.customer import CustomerCreate, CustomerServiceInput, CustomerUpdate
@@ -45,13 +49,23 @@ def _apply_customer_service_links(
     row.customer_services.clear()
     db.flush()
     for svc in services:
-        row.customer_services.append(
-            CustomerProductAndService(
-                customer_id=row.id,
-                product_and_service_id=svc.product_and_service_id,
-                rate=svc.rate,
-            )
+        pricing_type = PricingType(svc.pricing_type)
+        cps = CustomerProductAndService(
+            customer_id=row.id,
+            product_and_service_id=svc.product_and_service_id,
+            pricing_type=pricing_type,
+            rate=svc.rate if pricing_type == PricingType.flat else None,
         )
+        if pricing_type == PricingType.slab:
+            cps.slabs = [
+                CustomerProductAndServiceSlab(
+                    range_start=slab.range_start,
+                    range_end=slab.range_end,
+                    rate=slab.rate,
+                )
+                for slab in (svc.slabs or [])
+            ]
+        row.customer_services.append(cps)
 
 
 def _apply_customer_type_links(db: Session, row: Customer, ids: list[int] | None) -> None:
@@ -127,6 +141,7 @@ def create_customer_row(
         ship_same_as_billing=body.ship_same_as_billing,
         notes=body.notes,
         add_attachment_in_mail=body.add_attachment_in_mail,
+        payment_terms_days=body.payment_terms_days,
     )
     _apply_address_to_billing(row, body.billing)
     if body.ship_same_as_billing:
@@ -194,6 +209,8 @@ def update_customer_row(db: Session, row: Customer, body: CustomerUpdate) -> Cus
         row.notes = body.notes
     if body.add_attachment_in_mail is not None:
         row.add_attachment_in_mail = body.add_attachment_in_mail
+    if body.payment_terms_days is not None:
+        row.payment_terms_days = body.payment_terms_days
 
     if body.customer_services is not None:
         _apply_customer_service_links(db, row, body.customer_services)

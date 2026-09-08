@@ -1,7 +1,8 @@
 from datetime import datetime
 from decimal import Decimal
+from typing import Literal
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, EmailStr, Field, TypeAdapter, field_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, EmailStr, Field, TypeAdapter, field_validator, model_validator
 
 from app.models.customer import Customer, CustomerStatus
 
@@ -29,17 +30,60 @@ class AddressMixin(BaseModel):
     country: str | None = None
 
 
+class CustomerServiceSlabInput(BaseModel):
+    range_start: int = Field(..., ge=1)
+    range_end: int | None = Field(None, ge=1, description="Omit/null for an open-ended top tier")
+    rate: Decimal = Field(..., gt=0, description="Must be greater than zero")
+
+    @model_validator(mode="after")
+    def _check_range(self) -> "CustomerServiceSlabInput":
+        if self.range_end is not None and self.range_end < self.range_start:
+            raise ValueError("range_end must be greater than or equal to range_start")
+        return self
+
+
+class CustomerServiceSlabResponse(BaseModel):
+    id: int
+    range_start: int
+    range_end: int | None = None
+    rate: Decimal
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class CustomerServiceInput(BaseModel):
     product_and_service_id: int
-    rate: Decimal = Field(..., gt=0, description="Must be greater than zero")
+    pricing_type: Literal["flat", "slab"] = "flat"
+    # Required (and >0) when pricing_type == "flat"; unused for "slab".
+    rate: Decimal | None = Field(None, gt=0, description="Required when pricing_type is 'flat'")
+    # Required (>=1 entry) when pricing_type == "slab"; unused for "flat".
+    slabs: list[CustomerServiceSlabInput] | None = None
+
+    @model_validator(mode="after")
+    def _check_pricing(self) -> "CustomerServiceInput":
+        if self.pricing_type == "flat":
+            if self.rate is None or self.rate <= 0:
+                raise ValueError("rate must be greater than zero for flat pricing")
+            if self.slabs:
+                raise ValueError("slabs must not be set when pricing_type is 'flat'")
+        else:
+            if not self.slabs:
+                raise ValueError("at least one slab range is required for slab pricing")
+            ordered = sorted(self.slabs, key=lambda s: s.range_start)
+            for prev, cur in zip(ordered, ordered[1:]):
+                if prev.range_end is None or cur.range_start <= prev.range_end:
+                    raise ValueError("slab ranges must not overlap")
+        return self
 
 
 class CustomerServiceResponse(BaseModel):
     id: int
     product_and_service_id: int
     name: str | None = None
-    rate: Decimal
+    pricing_type: Literal["flat", "slab"]
+    rate: Decimal | None = None
     description: str | None = None
+    slabs: list[CustomerServiceSlabResponse] = Field(default_factory=list)
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -83,6 +127,7 @@ class CustomerCreate(BaseModel):
 
     notes: str | None = None
     add_attachment_in_mail: bool = False
+    payment_terms_days: int = Field(15, gt=0, description="Invoice due date = TxnDate + this many days")
     customer_services: list[CustomerServiceInput] | None = None
     customer_type_ids: list[int] | None = None
 
@@ -119,6 +164,7 @@ class CustomerUpdate(BaseModel):
 
     notes: str | None = None
     add_attachment_in_mail: bool | None = None
+    payment_terms_days: int | None = Field(None, gt=0, description="Invoice due date = TxnDate + this many days")
     customer_services: list[CustomerServiceInput] | None = None
     customer_type_ids: list[int] | None = None
 
@@ -172,6 +218,7 @@ class CustomerResponse(BaseModel):
 
     notes: str | None = None
     add_attachment_in_mail: bool = False
+    payment_terms_days: int = 15
     customer_services: list[CustomerServiceResponse] = Field(default_factory=list)
     customer_type_ids: list[int] = Field(default_factory=list)
     centers: list[CenterResponse] = Field(default_factory=list)
@@ -205,8 +252,13 @@ def customer_response_from_row(row: Customer) -> CustomerResponse:
                     id=cs.id,
                     product_and_service_id=cs.product_and_service_id,
                     name=cs.product_and_service.name if cs.product_and_service else None,
+                    pricing_type=cs.pricing_type.value,
                     rate=cs.rate,
                     description=cs.product_and_service.description if cs.product_and_service else None,
+                    slabs=[
+                        CustomerServiceSlabResponse.model_validate(slab, from_attributes=True)
+                        for slab in cs.slabs
+                    ],
                 )
                 for cs in row.customer_services
             ],

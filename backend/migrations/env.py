@@ -8,6 +8,7 @@ from alembic import context
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
+from app.core.config import settings  # noqa: E402
 from app.models.base import Base
 import app.models.user  # noqa: F401
 import app.models.customer  # noqa: F401
@@ -20,6 +21,14 @@ config = context.config
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
+
+# Always use the app's actual DB config (the same DATABASE_URL — from .env,
+# falling back to the default in app/core/config.py — that the FastAPI app
+# and scripts/*.py connect to) rather than alembic.ini's static sqlalchemy.url.
+# Otherwise migrations can silently target a different database than the app
+# actually uses, leaving `alembic current` reporting "head" while the real
+# app DB never got the schema change.
+config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
 
 target_metadata = Base.metadata
 

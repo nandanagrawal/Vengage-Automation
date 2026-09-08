@@ -12,6 +12,8 @@ from app.models.invoice_upload import InvoiceUpload
 from app.models.product_and_service import ProductAndService
 from app.models.user import User
 from app.schemas.invoice_validation import (
+    DriveAttachmentCheckRequest,
+    DriveAttachmentCheckResponse,
     GenerateRequest,
     PreviewResponse,
     RevalidateRequest,
@@ -24,6 +26,7 @@ from app.services.invoice_generation import (
 )
 from app.services.invoice_validation import (
     build_preview,
+    check_drive_attachments,
     revalidate,
     validate_file,
     _rows_to_parsed_file,
@@ -307,6 +310,19 @@ def preview_upload(
     return build_preview(body, db)
 
 
+@router.post("/invoice-uploads/check-drive-attachments", response_model=DriveAttachmentCheckResponse, status_code=200)
+def check_drive_attachments_route(
+    body: DriveAttachmentCheckRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Pre-flight check before generating: any customer with add_attachment_in_mail
+    whose center has no matching file in the given Drive folder is reported here
+    so the UI can warn and let the user decide before invoices are created."""
+    warnings = check_drive_attachments(body.rows, body.drive_folder_url, db)
+    return DriveAttachmentCheckResponse(warnings=warnings)
+
+
 def _run_generation_bg(upload_id: int, body_dict: dict) -> None:
     """Run invoice generation in a background thread with its own DB session.
 
@@ -340,6 +356,7 @@ def _run_generation_bg(upload_id: int, body_dict: dict) -> None:
             realm_id=tokens.realm_id,
             parsed=parsed,
             invoice_upload_id=upload_id,
+            drive_folder_url=body_dict.get("drive_folder_url"),
         )
         final_status = (
             "completed" if result.invoices_failed == 0

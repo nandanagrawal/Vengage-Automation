@@ -3,8 +3,7 @@
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
-import { apiGet, apiPatch, type CustomerRow, type CustomerCenterRow, type CustomerServiceRow } from "@/lib/api";
-import { CustomerModal } from "../CustomerModal";
+import { apiGet, type CustomerRow, type CustomerCenterRow, type CustomerServiceRow } from "@/lib/api";
 
 function statusStyle(s: string) {
   if (s === "approved") return { label: "Approved", cls: "text-emerald-700 bg-emerald-50 border-emerald-200" };
@@ -49,31 +48,65 @@ function CenterTag({ name }: { name: string }) {
   );
 }
 
+function slabRangeLabel(start: number, end: number | null) {
+  return end != null ? `${start}-${end}` : `${start}+`;
+}
+
 function ServiceRow({ svc }: { svc: CustomerServiceRow }) {
+  const isSlab = svc.pricing_type === "slab";
   return (
     <div style={{
-      display: "flex", alignItems: "center", justifyContent: "space-between",
       padding: "10px 14px", borderRadius: 8,
       border: "1px solid var(--border)", background: "var(--surface-1)",
-      gap: 12,
     }}>
-      <div style={{ minWidth: 0 }}>
-        <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-1)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-          {svc.name ?? `Product #${svc.product_and_service_id}`}
-        </div>
-        {svc.description && (
-          <div style={{ fontSize: 11, color: "var(--text-3)", marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-            {svc.description}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <span style={{ fontSize: 13, fontWeight: 600, color: "var(--text-1)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+              {svc.name ?? `Product #${svc.product_and_service_id}`}
+            </span>
+            <span style={{
+              flexShrink: 0, fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.4,
+              color: isSlab ? "var(--primary)" : "var(--text-3)",
+              background: isSlab ? "var(--primary-bg)" : "var(--surface-2)",
+              border: "1px solid var(--border)",
+              padding: "1px 6px", borderRadius: 5,
+            }}>
+              {isSlab ? "Slab" : "Flat"}
+            </span>
           </div>
+          {svc.description && (
+            <div style={{ fontSize: 11, color: "var(--text-3)", marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+              {svc.description}
+            </div>
+          )}
+        </div>
+        {!isSlab && (
+          <span style={{
+            flexShrink: 0, fontSize: 13, fontWeight: 700,
+            color: "var(--success)", background: "var(--success-bg)",
+            padding: "2px 9px", borderRadius: 6,
+          }}>
+            ${svc.rate != null ? Number(svc.rate).toFixed(3) : "—"}
+          </span>
         )}
       </div>
-      <span style={{
-        flexShrink: 0, fontSize: 13, fontWeight: 700,
-        color: "var(--success)", background: "var(--success-bg)",
-        padding: "2px 9px", borderRadius: 6,
-      }}>
-        ${Number(svc.rate).toFixed(3)}
-      </span>
+      {isSlab && svc.slabs.length > 0 && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>
+          {svc.slabs.map((s) => (
+            <span key={s.id} style={{
+              display: "inline-flex", alignItems: "center", gap: 5,
+              fontSize: 11.5, fontFamily: "monospace",
+              color: "var(--text-2)", background: "var(--surface-2)",
+              border: "1px solid var(--border)",
+              padding: "2px 8px", borderRadius: 6,
+            }}>
+              {slabRangeLabel(s.range_start, s.range_end)}
+              <span style={{ color: "var(--success)", fontWeight: 700 }}>${Number(s.rate).toFixed(3)}</span>
+            </span>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -86,8 +119,6 @@ export default function CustomerDetailPage() {
   const [customer, setCustomer] = useState<CustomerRow | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [editOpen, setEditOpen] = useState(false);
-  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     setLoading(true);
@@ -112,18 +143,6 @@ export default function CustomerDetailPage() {
 
   const ss = statusStyle(customer.status);
 
-  const onEdit = async (payload: Record<string, unknown>) => {
-    setSaving(true);
-    try {
-      const updated = await apiPatch<CustomerRow>(`/customers/${customerId}`, payload);
-      setCustomer(updated);
-      setEditOpen(false);
-      return updated;
-    } finally {
-      setSaving(false);
-    }
-  };
-
   return (
     <div className="max-w-4xl mx-auto animate-fadeInUp">
       <div className="flex items-center justify-between mb-5">
@@ -133,25 +152,16 @@ export default function CustomerDetailPage() {
           </svg>
           Customers
         </Link>
-        <button
-          onClick={() => setEditOpen(true)}
+        <Link
+          href={`/customers/${customerId}/edit`}
           className="btn btn-secondary inline-flex items-center gap-2"
         >
           <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
           </svg>
           Edit
-        </button>
+        </Link>
       </div>
-
-      <CustomerModal
-        open={editOpen}
-        onClose={() => setEditOpen(false)}
-        onSubmit={onEdit}
-        submitting={saving}
-        mode="edit"
-        customer={customer}
-      />
 
       <div className="flex items-center gap-4 mb-6">
         <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-indigo-500/30 to-violet-600/30 border border-indigo-200 flex items-center justify-center text-indigo-600 text-xl font-bold shrink-0">
@@ -191,6 +201,7 @@ export default function CustomerDetailPage() {
               {customer.add_attachment_in_mail ? "Yes" : "No"}
             </span>
           </div>
+          <InfoField label="Payment Terms" value={`${customer.payment_terms_days} days`} />
         </InfoSection>
 
         <InfoSection title="Billing Address">

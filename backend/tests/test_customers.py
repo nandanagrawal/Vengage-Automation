@@ -254,6 +254,95 @@ def test_customer_invalid_service_code_rejected(admin_client, fake_qbo):
     assert r.status_code == 422
 
 
+# ── Flat / slab pricing ───────────────────────────────────────────────────────
+
+def _synced_product_id(admin_client, fake_qbo, qbo_item_id: str, name: str) -> int:
+    fake_qbo.items = [{"Id": qbo_item_id, "Name": name, "Type": "Service", "Active": True, "SyncToken": "0"}]
+    admin_client.post("/api/v1/sync/quickbooks")
+    products = admin_client.get("/api/v1/product-and-services").json()
+    return next(p["id"] for p in products if p["qbo_id"] == qbo_item_id)
+
+
+def test_customer_flat_pricing_defaults_and_round_trips(admin_client, fake_qbo):
+    pid = _synced_product_id(admin_client, fake_qbo, "20", "Flat Widget")
+    r = admin_client.post(
+        "/api/v1/customers",
+        json={**_BASE, "display_name": "Flat Co", "customer_services": [
+            {"product_and_service_id": pid, "rate": "12.50"}
+        ]},
+    )
+    assert r.status_code == 200, r.text
+    svc = r.json()["customer_services"][0]
+    assert svc["pricing_type"] == "flat"
+    assert float(svc["rate"]) == 12.5
+    assert svc["slabs"] == []
+
+
+def test_customer_slab_pricing_created_with_multiple_tiers(admin_client, fake_qbo):
+    pid = _synced_product_id(admin_client, fake_qbo, "21", "Olivia AI Bookings for Imaging Workflow")
+    r = admin_client.post(
+        "/api/v1/customers",
+        json={**_BASE, "display_name": "Slab Co", "customer_services": [
+            {
+                "product_and_service_id": pid,
+                "pricing_type": "slab",
+                "slabs": [
+                    {"range_start": 1, "range_end": 1000, "rate": "5.00"},
+                    {"range_start": 1001, "range_end": 2500, "rate": "4.00"},
+                    {"range_start": 2501, "range_end": None, "rate": "3.00"},
+                ],
+            }
+        ]},
+    )
+    assert r.status_code == 200, r.text
+    svc = r.json()["customer_services"][0]
+    assert svc["pricing_type"] == "slab"
+    assert svc["rate"] is None
+    assert len(svc["slabs"]) == 3
+    assert [s["range_start"] for s in svc["slabs"]] == [1, 1001, 2501]
+    assert svc["slabs"][2]["range_end"] is None
+
+
+def test_customer_flat_pricing_requires_rate(admin_client, fake_qbo):
+    pid = _synced_product_id(admin_client, fake_qbo, "22", "No Rate Widget")
+    r = admin_client.post(
+        "/api/v1/customers",
+        json={**_BASE, "display_name": "No Rate Co", "customer_services": [
+            {"product_and_service_id": pid}
+        ]},
+    )
+    assert r.status_code == 422
+
+
+def test_customer_slab_pricing_requires_at_least_one_tier(admin_client, fake_qbo):
+    pid = _synced_product_id(admin_client, fake_qbo, "23", "Empty Slab Widget")
+    r = admin_client.post(
+        "/api/v1/customers",
+        json={**_BASE, "display_name": "Empty Slab Co", "customer_services": [
+            {"product_and_service_id": pid, "pricing_type": "slab", "slabs": []}
+        ]},
+    )
+    assert r.status_code == 422
+
+
+def test_customer_slab_pricing_rejects_overlapping_ranges(admin_client, fake_qbo):
+    pid = _synced_product_id(admin_client, fake_qbo, "24", "Overlap Widget")
+    r = admin_client.post(
+        "/api/v1/customers",
+        json={**_BASE, "display_name": "Overlap Co", "customer_services": [
+            {
+                "product_and_service_id": pid,
+                "pricing_type": "slab",
+                "slabs": [
+                    {"range_start": 1, "range_end": 1000, "rate": "5.00"},
+                    {"range_start": 900, "range_end": 2000, "rate": "4.00"},
+                ],
+            }
+        ]},
+    )
+    assert r.status_code == 422
+
+
 def test_qbo_customer_payload_excludes_app_service_links():
     from app.models.customer import Customer
     from app.services.qbo_client import customer_model_to_qbo_payload

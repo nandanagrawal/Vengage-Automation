@@ -54,3 +54,9 @@ class ProductAndService(Base):
         back_populates="product_and_service",
         passive_deletes=True,
     )
+    column_mapping: Mapped["ProductColumnMapping | None"] = relationship(
+        "ProductColumnMapping",
+        back_populates="product_and_service",
+        uselist=False,
+        passive_deletes=True,
+    )

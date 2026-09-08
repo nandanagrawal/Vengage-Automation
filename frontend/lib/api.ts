@@ -148,6 +148,7 @@ export type CustomerRow = {
 
   notes: string | null;
   add_attachment_in_mail: boolean;
+  payment_terms_days: number;
 
   created_at: string;
   updated_at: string;
@@ -174,12 +175,23 @@ export type ServiceCodeRow = {
   updated_at: string;
 };
 
+export type PricingType = "flat" | "slab";
+
+export type CustomerServiceSlabRow = {
+  id: number;
+  range_start: number;
+  range_end: number | null;
+  rate: string;
+};
+
 export type CustomerServiceRow = {
   id: number;
   product_and_service_id: number;
   name: string | null;
-  rate: string;
+  pricing_type: PricingType;
+  rate: string | null;
   description: string | null;
+  slabs: CustomerServiceSlabRow[];
 };
 
 export type CustomerCenterRow = {
@@ -195,6 +207,17 @@ export type ProductAndServiceRow = {
   item_type: string | null;
   active: boolean;
   description: string | null;
+  // Admin-configured exact spreadsheet column override. Null = still uses the
+  // hardcoded PRODUCT_COLUMN_MAP / diff / fixed-quantity logic on the backend.
+  sheet_column_id: number | null;
+  column_header: string | null;
+};
+
+export type SheetColumnRow = {
+  id: number;
+  name: string;
+  // Set when this column is already assigned to a different product.
+  mapped_product_name: string | null;
 };
 
 export type CenterRow = {
@@ -397,6 +420,10 @@ export type PreviewResponse = {
 export type GenerateRequest = {
   metric_columns: string[];
   rows: ValidatedRow[];
+  // Google Drive folder link holding per-centre raw-data files (e.g.
+  // "VNG-IMG-60.xlsx") — each matched centre's file gets attached to its
+  // QBO invoice.
+  drive_folder_url?: string;
 };
 
 export async function apiValidateInvoiceFile(file: File): Promise<ValidationResponse> {
@@ -429,6 +456,18 @@ export type GenerateJobResponse = { upload_id: number; status: string };
 
 export async function apiGenerateInvoices(req: GenerateRequest): Promise<GenerateJobResponse> {
   return apiPost<GenerateJobResponse>("/invoice-uploads/generate", req);
+}
+
+export type DriveAttachmentCheckResponse = { warnings: string[] };
+
+export async function apiCheckDriveAttachments(
+  metric_columns: string[],
+  rows: ValidatedRow[],
+  drive_folder_url: string,
+): Promise<DriveAttachmentCheckResponse> {
+  return apiPost<DriveAttachmentCheckResponse>("/invoice-uploads/check-drive-attachments", {
+    metric_columns, rows, drive_folder_url,
+  });
 }
 
 export type SheetConfigResponse = {

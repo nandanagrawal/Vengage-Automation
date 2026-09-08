@@ -11,7 +11,9 @@ from app.api.v1.endpoints import (
     invoice_uploads,
     invoices,
     product_and_services,
+    product_column_mappings,
     service_codes,
+    sheet_columns,
     sync,
     webhooks,
 )
@@ -25,6 +27,8 @@ api_router.include_router(customer_types.router, tags=["customer-types"])
 api_router.include_router(customers.router, tags=["customers"])
 api_router.include_router(centers.router, tags=["centers"])
 api_router.include_router(product_and_services.router, tags=["product-and-services"])
+api_router.include_router(product_column_mappings.router, tags=["product-column-mappings"])
+api_router.include_router(sheet_columns.router, tags=["sheet-columns"])
 api_router.include_router(invoices.router, tags=["invoices"])
 api_router.include_router(invoice_uploads.router, tags=["invoice-uploads"])
 api_router.include_router(service_codes.router, tags=["service-codes"])

@@ -40,7 +40,9 @@ def init_db() -> None:
     import app.models.generated_invoice  # noqa: F401
     import app.models.invoice_upload  # noqa: F401
     import app.models.product_and_service  # noqa: F401
+    import app.models.product_column_mapping  # noqa: F401
     import app.models.service_code  # noqa: F401
+    import app.models.sheet_column  # noqa: F401
     import app.models.user  # noqa: F401
 
     Base.metadata.create_all(bind=engine)

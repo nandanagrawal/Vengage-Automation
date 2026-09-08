@@ -3,9 +3,8 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { apiDelete, apiGet, apiPatch, apiPost, type CustomerRow, type SyncResult } from "@/lib/api";
+import { apiDelete, apiGet, apiPost, type CustomerRow, type SyncResult } from "@/lib/api";
 import { useAuth } from "@/lib/useAuth";
-import { CustomerModal } from "./CustomerModal";
 
 type SortKey = "display_name" | "primary_email" | "status";
 type SortDir = "asc" | "desc";
@@ -40,11 +39,7 @@ export default function CustomersPage() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [syncMsg, setSyncMsg] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
   const [approving, setApproving] = useState<number | null>(null);
-
-  // Edit modal
-  const [editCustomer, setEditCustomer] = useState<CustomerRow | null>(null);
 
   // Delete confirmation
   const [deleteTarget, setDeleteTarget] = useState<CustomerRow | null>(null);
@@ -82,21 +77,6 @@ export default function CustomersPage() {
       setSyncMsg(e instanceof Error ? e.message : "Sync failed");
     } finally {
       setSyncing(false);
-    }
-  };
-
-  const onEdit = async (payload: Record<string, unknown>): Promise<CustomerRow> => {
-    if (!editCustomer) throw new Error("No customer selected");
-    setSaving(true);
-    try {
-      const updated = await apiPatch<CustomerRow>(`/customers/${editCustomer.id}`, payload);
-      await load();
-      return updated;
-    } catch (e) {
-      setLoadError(e instanceof Error ? e.message : "Update failed");
-      throw e;
-    } finally {
-      setSaving(false);
     }
   };
 
@@ -190,9 +170,6 @@ export default function CustomersPage() {
           </button>
         </div>
       </div>
-
-      {/* Modals */}
-      <CustomerModal open={!!editCustomer} onClose={() => setEditCustomer(null)} onSubmit={onEdit} submitting={saving} mode="edit" customer={editCustomer ?? undefined} />
 
       {/* Delete confirmation */}
       {deleteTarget && (
@@ -299,15 +276,16 @@ export default function CustomersPage() {
                     </svg>
                   </Link>
                   {/* Edit */}
-                  <button
+                  <Link
+                    href={`/customers/${c.id}/edit`}
                     title="Edit customer"
-                    onClick={(e) => { e.stopPropagation(); setEditCustomer(c); }}
+                    onClick={(e) => e.stopPropagation()}
                     className="p-1.5 rounded-lg text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 transition-colors"
                   >
                     <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931zm0 0L19.5 7.125" />
                     </svg>
-                  </button>
+                  </Link>
 
                   {/* Approve / Reject (admin, pending only) */}
                   {isAdmin && c.status === "pending" && (

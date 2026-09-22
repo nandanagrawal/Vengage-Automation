@@ -52,7 +52,7 @@ const navItems: NavItem[] = [
   },
   {
     href: "/product-mapping",
-    label: "Product & Service Mapping",
+    label: "Sheet Column Catalog",
     adminOnly: true,
     icon: (
       <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" viewBox="0 0 24 24">

@@ -2,7 +2,7 @@
 
 import type { FormEvent, ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
-import type { CenterRow, CustomerRow, CustomerTypeRow, PricingType, ProductAndServiceRow } from "@/lib/api";
+import type { CenterRow, CustomerRow, CustomerTypeRow, PricingType, ProductAndServiceRow, SheetColumnRow } from "@/lib/api";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 
 // ── Shared types ────────────────────────────────────────────────────────────
@@ -30,6 +30,8 @@ function newSlabLine(): SlabLine {
 export type ServiceRow = {
   key: string;
   product_and_service_id: number | "";
+  sheet_column_id: number | "";   // which sheet column this row reads its quantity from
+  description: string;            // combined with the auto "{Center} for {Mon YY}" text
   pricing_type: PricingType;
   rate: string;        // used when pricing_type === "flat"
   slabs: SlabLine[];   // used when pricing_type === "slab"
@@ -40,7 +42,10 @@ function newServiceRow(): ServiceRow {
     typeof crypto !== "undefined" && "randomUUID" in crypto
       ? crypto.randomUUID()
       : `sr-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-  return { key, product_and_service_id: "", pricing_type: "flat", rate: "", slabs: [] };
+  return {
+    key, product_and_service_id: "", sheet_column_id: "", description: "",
+    pricing_type: "flat", rate: "", slabs: [],
+  };
 }
 
 export type CustomerFormValues = {
@@ -179,6 +184,7 @@ export function useCustomerForm(mode: "create" | "edit", customer: CustomerRow |
 
   const [serviceRows, setServiceRows] = useState<ServiceRow[]>([]);
   const [productOptions, setProductOptions] = useState<ProductAndServiceRow[]>([]);
+  const [sheetColumnOptions, setSheetColumnOptions] = useState<SheetColumnRow[]>([]);
   const [serviceError, setServiceError] = useState<string | null>(null);
 
   const [customerTypeOptions, setCustomerTypeOptions] = useState<CustomerTypeRow[]>([]);
@@ -196,6 +202,8 @@ export function useCustomerForm(mode: "create" | "edit", customer: CustomerRow |
         (customer.customer_services ?? []).map((cs) => ({
           key: `cs-${cs.id}`,
           product_and_service_id: cs.product_and_service_id,
+          sheet_column_id: cs.sheet_column_id ?? "",
+          description: cs.description ?? "",
           pricing_type: cs.pricing_type,
           rate: cs.rate != null ? parseFloat(String(cs.rate)).toFixed(2) : "",
           slabs: (cs.slabs ?? []).map((s) => ({
@@ -241,6 +249,9 @@ export function useCustomerForm(mode: "create" | "edit", customer: CustomerRow |
     let cancelled = false;
     void apiGet<ProductAndServiceRow[]>("/product-and-services")
       .then((rows) => { if (!cancelled) setProductOptions(rows); })
+      .catch(() => { /* non-fatal */ });
+    void apiGet<SheetColumnRow[]>("/sheet-columns")
+      .then((rows) => { if (!cancelled) setSheetColumnOptions(rows); })
       .catch(() => { /* non-fatal */ });
     void apiGet<CustomerTypeRow[]>("/customer-types")
       .then((rows) => { if (!cancelled) setCustomerTypeOptions(rows); })
@@ -294,8 +305,17 @@ export function useCustomerForm(mode: "create" | "edit", customer: CustomerRow |
     );
   };
 
-  const usedProductIds = useMemo(
-    () => new Set(serviceRows.map((r) => r.product_and_service_id).filter((id) => id !== "")),
+  // Duplicate guard mirrors the backend's uq_customer_product_column constraint:
+  // the same product CAN be picked on multiple rows now, as long as each uses a
+  // different sheet column — only the exact same (product, column) pair twice
+  // is a conflict.
+  const usedProductColumnPairs = useMemo(
+    () =>
+      new Set(
+        serviceRows
+          .filter((r) => r.product_and_service_id !== "" && r.sheet_column_id !== "")
+          .map((r) => `${r.product_and_service_id}:${r.sheet_column_id}`),
+      ),
     [serviceRows],
   );
 
@@ -352,8 +372,23 @@ export function useCustomerForm(mode: "create" | "edit", customer: CustomerRow |
     };
     const hasShip = Object.values(shipping).some(Boolean);
 
-    // Validate service rows: flat needs a rate > 0; slab needs >=1 range, each with a positive rate.
+    // Validate service rows: a sheet column is required; flat needs a rate > 0;
+    // slab needs >=1 range, each with a positive rate.
     const rowsWithProduct = serviceRows.filter((r) => r.product_and_service_id !== "");
+    const missingColumn = rowsWithProduct.find((r) => r.sheet_column_id === "");
+    if (missingColumn) {
+      setServiceError("Choose a sheet column for each service — that's what its quantity is read from.");
+      return null;
+    }
+    const seenPairs = new Set<string>();
+    for (const r of rowsWithProduct) {
+      const pairKey = `${r.product_and_service_id}:${r.sheet_column_id}`;
+      if (seenPairs.has(pairKey)) {
+        setServiceError("The same product and column are mapped twice — pick a different column for one of them.");
+        return null;
+      }
+      seenPairs.add(pairKey);
+    }
     const badFlat = rowsWithProduct.find(
       (r) => r.pricing_type === "flat" && !(parseFloat(r.rate) > 0),
     );
@@ -389,9 +424,17 @@ export function useCustomerForm(mode: "create" | "edit", customer: CustomerRow |
 
     const validServices = rowsWithProduct.map((r) =>
       r.pricing_type === "flat"
-        ? { product_and_service_id: r.product_and_service_id as number, pricing_type: "flat", rate: r.rate }
+        ? {
+            product_and_service_id: r.product_and_service_id as number,
+            sheet_column_id: r.sheet_column_id as number,
+            description: r.description.trim() || undefined,
+            pricing_type: "flat",
+            rate: r.rate,
+          }
         : {
             product_and_service_id: r.product_and_service_id as number,
+            sheet_column_id: r.sheet_column_id as number,
+            description: r.description.trim() || undefined,
             pricing_type: "slab",
             slabs: r.slabs.map((s) => ({
               range_start: Math.trunc(parseFloat(s.range_start)),
@@ -455,9 +498,9 @@ export function useCustomerForm(mode: "create" | "edit", customer: CustomerRow |
     openName, setOpenName, openAddr, setOpenAddr, openNotes, setOpenNotes,
     openExtra, setOpenExtra, openCenters, setOpenCenters,
     centerLines, setCenterLines, removeCenterLine, centersLoadError,
-    serviceRows, setServiceRows, productOptions, serviceError,
+    serviceRows, setServiceRows, productOptions, sheetColumnOptions, serviceError,
     updateServiceRow, removeServiceRow, addSlabLine, updateSlabLine, removeSlabLine,
-    usedProductIds,
+    usedProductColumnPairs,
     customerTypeOptions, setCustomerTypeOptions,
     selectedCustomerTypeIds, setSelectedCustomerTypeIds,
     newTypeName, setNewTypeName, creatingType, setCreatingType, createTypeError, setCreateTypeError,
@@ -475,9 +518,9 @@ export function CustomerFormFields({ api, mode }: { api: CustomerFormApi; mode: 
     openName, setOpenName, openAddr, setOpenAddr, openNotes, setOpenNotes,
     openExtra, setOpenExtra, openCenters, setOpenCenters,
     centerLines, setCenterLines, removeCenterLine, centersLoadError,
-    serviceRows, productOptions, serviceError,
+    serviceRows, productOptions, sheetColumnOptions, serviceError,
     updateServiceRow, removeServiceRow, addSlabLine, updateSlabLine, removeSlabLine,
-    usedProductIds,
+    usedProductColumnPairs,
     customerTypeOptions, setCustomerTypeOptions,
     selectedCustomerTypeIds, setSelectedCustomerTypeIds,
     newTypeName, setNewTypeName, creatingType, setCreatingType, createTypeError, setCreateTypeError,
@@ -698,17 +741,18 @@ export function CustomerFormFields({ api, mode }: { api: CustomerFormApi; mode: 
         <div className="mb-5">
           <label className={labelCls()}>Services &amp; rates</label>
           <p className="text-[11px] text-gray-400 mb-2">
-            Select a product/service, then choose Flat (one rate) or Slab (multiple ranges, each with its own rate).
-            Each service can only appear once.
+            Select a product/service and the sheet column it reads its quantity from, then choose Flat (one rate)
+            or Slab (multiple ranges, each with its own rate). The same product can be added more than once as
+            long as each occurrence uses a different column.
           </p>
 
           {serviceRows.length > 0 && (
             <div className="rounded-lg border border-gray-200 bg-gray-50 overflow-hidden mb-2 divide-y divide-gray-100">
               {serviceRows.map((row) => {
-                const selectedProduct = productOptions.find((p) => p.id === row.product_and_service_id);
+                const pairKey = `${row.product_and_service_id}:${row.sheet_column_id}`;
                 return (
                   <div key={row.key} className="px-3 py-2.5">
-                    <div className="grid grid-cols-[minmax(0,2fr)_6.5rem_minmax(0,2fr)_2rem] gap-2 items-center">
+                    <div className="grid grid-cols-[minmax(0,1.6fr)_minmax(0,1.3fr)_5.5rem_minmax(0,1.1fr)_1.5rem] gap-2 items-center">
                       {/* Product dropdown */}
                       <select
                         value={row.product_and_service_id === "" ? "" : String(row.product_and_service_id)}
@@ -719,16 +763,38 @@ export function CustomerFormFields({ api, mode }: { api: CustomerFormApi; mode: 
                         className="rounded-lg bg-white border border-gray-200 px-2 py-1.5 text-xs text-gray-900 focus:outline-none focus:ring-1 focus:ring-indigo-200 appearance-none"
                       >
                         <option value="" style={{ background: "white", color: "var(--text-4)" }}>Select…</option>
-                        {activeProducts.map((p) => {
-                          const isUsedElsewhere = usedProductIds.has(p.id) && row.product_and_service_id !== p.id;
+                        {activeProducts.map((p) => (
+                          <option key={p.id} value={p.id} style={{ background: "white", color: "var(--text-2)" }}>
+                            {p.name}
+                          </option>
+                        ))}
+                      </select>
+
+                      {/* Sheet column dropdown */}
+                      <select
+                        value={row.sheet_column_id === "" ? "" : String(row.sheet_column_id)}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          updateServiceRow(row.key, { sheet_column_id: v === "" ? "" : Number(v) });
+                        }}
+                        className="rounded-lg bg-white border border-gray-200 px-2 py-1.5 text-xs text-gray-900 focus:outline-none focus:ring-1 focus:ring-indigo-200 appearance-none"
+                      >
+                        <option value="" style={{ background: "white", color: "var(--text-4)" }}>Column…</option>
+                        {sheetColumnOptions.map((c) => {
+                          // Same column disabled only when it would exactly duplicate this row's
+                          // own (product, column) pair on another row — otherwise reusable.
+                          const conflictsElsewhere =
+                            row.product_and_service_id !== "" &&
+                            usedProductColumnPairs.has(`${row.product_and_service_id}:${c.id}`) &&
+                            pairKey !== `${row.product_and_service_id}:${c.id}`;
                           return (
                             <option
-                              key={p.id}
-                              value={p.id}
-                              disabled={isUsedElsewhere}
+                              key={c.id}
+                              value={c.id}
+                              disabled={conflictsElsewhere}
                               style={{ background: "white", color: "var(--text-2)" }}
                             >
-                              {p.name}
+                              {c.name}
                             </option>
                           );
                         })}
@@ -761,9 +827,7 @@ export function CustomerFormFields({ api, mode }: { api: CustomerFormApi; mode: 
                           className="rounded-lg bg-white border border-gray-200 px-2 py-1.5 text-xs text-gray-900 focus:outline-none focus:ring-1 focus:ring-indigo-200"
                         />
                       ) : (
-                        <span className="text-xs text-gray-500 truncate px-1">
-                          {selectedProduct?.description ?? "—"}
-                        </span>
+                        <span className="text-[10px] text-gray-400 truncate px-1">rates below</span>
                       )}
 
                       {/* Remove */}
@@ -776,6 +840,15 @@ export function CustomerFormFields({ api, mode }: { api: CustomerFormApi; mode: 
                         ✕
                       </button>
                     </div>
+
+                    {/* Description — combined with the auto "{Center} for {Mon YY}" text on every QBO line this row produces */}
+                    <input
+                      type="text"
+                      placeholder="Description (optional) — combined with the auto centre/month text on the invoice"
+                      value={row.description}
+                      onChange={(e) => updateServiceRow(row.key, { description: e.target.value })}
+                      className="mt-1.5 w-full rounded-lg bg-white border border-gray-200 px-2 py-1.5 text-xs text-gray-900 focus:outline-none focus:ring-1 focus:ring-indigo-200"
+                    />
 
                     {row.pricing_type === "slab" && (
                       <div className="mt-2 ml-1 pl-3 border-l-2 border-gray-200">

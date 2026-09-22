@@ -74,6 +74,15 @@ function ServiceRow({ svc }: { svc: CustomerServiceRow }) {
             }}>
               {isSlab ? "Slab" : "Flat"}
             </span>
+            {svc.column_header && (
+              <span style={{
+                flexShrink: 0, fontSize: 10, color: "var(--text-3)",
+                background: "var(--surface-2)", border: "1px solid var(--border)",
+                padding: "1px 6px", borderRadius: 5, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+              }}>
+                col: {svc.column_header}
+              </span>
+            )}
           </div>
           {svc.description && (
             <div style={{ fontSize: 11, color: "var(--text-3)", marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>

@@ -42,7 +42,6 @@ from app.models.invoice import Invoice  # noqa: E402
 from app.models.invoice_email_activity import InvoiceEmailActivity  # noqa: E402
 from app.models.invoice_upload import InvoiceUpload  # noqa: E402
 from app.models.product_and_service import ProductAndService  # noqa: E402
-from app.models.product_column_mapping import ProductColumnMapping  # noqa: E402
 from app.models.service_code import ServiceCode  # noqa: E402
 from app.models.sheet_column import SheetColumn  # noqa: E402
 from app.models.user import User, UserRole  # noqa: E402
@@ -187,7 +186,6 @@ def reset_db():
     db.query(InvoiceEmailActivity).delete()
     db.query(CustomerProductAndServiceSlab).delete()
     db.query(CustomerProductAndService).delete()
-    db.query(ProductColumnMapping).delete()
     db.query(SheetColumn).delete()
     db.query(ProductAndService).delete()
     db.query(ServiceCode).delete()

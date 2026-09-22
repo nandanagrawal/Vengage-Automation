@@ -28,6 +28,8 @@ def _get_customer_or_404(db: Session, customer_id: int) -> Customer:
             .selectinload(CustomerProductAndService.product_and_service),
             selectinload(Customer.customer_services)
             .selectinload(CustomerProductAndService.slabs),
+            selectinload(Customer.customer_services)
+            .selectinload(CustomerProductAndService.sheet_column),
             selectinload(Customer.customer_types),
             selectinload(Customer.centers),
         )
@@ -51,6 +53,8 @@ def list_customers(
             .selectinload(CustomerProductAndService.product_and_service),
             selectinload(Customer.customer_services)
             .selectinload(CustomerProductAndService.slabs),
+            selectinload(Customer.customer_services)
+            .selectinload(CustomerProductAndService.sheet_column),
             selectinload(Customer.customer_types),
             selectinload(Customer.centers),
         )

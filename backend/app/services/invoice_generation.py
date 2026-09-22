@@ -18,12 +18,14 @@ database.  Rows whose col-0 value does not match any Center are skipped
 
 Product → column mapping
 ------------------------
-Quantity is resolved solely via ProductColumnMapping (admin-configured, see
-the Product & Service Mapping page / SheetColumn catalog): an exact
-(case-insensitive, trimmed) match between a product's mapped column and a
-header in the uploaded file. A product with no mapping configured produces
-no line item at all — nothing is summed, diffed, defaulted to a fixed
-quantity, or guessed by name.
+Quantity is resolved solely via CustomerProductAndService.sheet_column_id
+(admin-configured per customer-service row, see the customer edit page /
+SheetColumn catalog): an exact (case-insensitive, trimmed) match between that
+row's mapped column and a header in the uploaded file. A row with no column
+mapped produces no line item at all — nothing is summed, diffed, defaulted to
+a fixed quantity, or guessed by name. The same product can be mapped twice
+for one customer against two different columns — each occurrence is its own
+row with its own column, so both produce independent line items.
 
 Invoice grouping
 ----------------
@@ -69,7 +71,6 @@ from app.models.generated_invoice import (
 )
 from app.models.invoice import Invoice
 from app.models.product_and_service import ProductAndService
-from app.models.product_column_mapping import ProductColumnMapping
 from app.services import gdrive_client
 from app.services.qbo_client import SupportsQuickBooks
 
@@ -383,29 +384,17 @@ def _has_valid_pricing(cs: CustomerProductAndService) -> bool:
     return cs.rate is not None and cs.rate > 0
 
 
-def _load_dynamic_columns(db: Session) -> dict[int, str]:
-    """product_and_service_id -> admin-configured exact column header.
-
-    Small table, loaded whole rather than filtered by product ids — cheap,
-    and avoids passing a product-id set through every call site.
-    """
-    return {
-        row.product_and_service_id: row.sheet_column.name
-        for row in db.query(ProductColumnMapping).options(selectinload(ProductColumnMapping.sheet_column)).all()
-    }
-
-
 def _get_quantity(
     center_metrics: dict[str, Decimal],
     dynamic_column: str | None,
 ) -> Decimal | None:
-    """Look up quantity for a product from a center's metric row.
+    """Look up quantity for a customer-service row from a center's metric row.
 
-    Quantity comes solely from the admin-configured ProductColumnMapping
+    Quantity comes solely from that row's own CustomerProductAndService.sheet_column
     (`dynamic_column`) — an exact (case-insensitive, trimmed) match against a
     column header in the uploaded file. No summing, no diffing, no fixed
-    quantities, no name-based guessing: a product with no mapping configured,
-    or whose configured column isn't present in this file, is skipped.
+    quantities, no name-based guessing: a row with no column mapped, or whose
+    mapped column isn't present in this file, is skipped.
     """
     if dynamic_column is None:
         return None
@@ -483,7 +472,6 @@ def _build_line_items_for_center(
     desc_month_year: str,
     service_date: date,
     tax_code_id: str = "",
-    dynamic_columns: dict[int, str] | None = None,
 ) -> list[_LineItem]:
     """Build _LineItem objects for one center, supporting slab-based pricing.
 
@@ -498,18 +486,29 @@ def _build_line_items_for_center(
     """
     col_b = center_name.strip()
 
-    def _standard_desc() -> str:
-        """"{Center Name} for {Mon} {YY}", e.g. "Rockingham Radiology for Aug 26"."""
+    def _standard_desc(cs_description: str | None) -> str:
+        """"{description} – {Center Name} for {Mon} {YY}" when the row has a
+        description set, e.g. "Provisional bookings – Rockingham Radiology for
+        Aug 26"; just "{Center Name} for {Mon} {YY}" otherwise."""
         if col_b and desc_month_year:
-            return f"{col_b} for {desc_month_year}"
-        return col_b or desc_month_year
+            base = f"{col_b} for {desc_month_year}"
+        else:
+            base = col_b or desc_month_year
+        if cs_description:
+            return f"{cs_description} – {base}" if base else cs_description
+        return base
 
-    def _slab_desc(range_text: str) -> str:
-        """"{Center Name} – {range} Booking for {Mon} {YY}", with fallbacks for missing parts."""
+    def _slab_desc(range_text: str, cs_description: str | None) -> str:
+        """"{description} – {Center Name} – {range} Booking for {Mon} {YY}",
+        with fallbacks for missing parts."""
         base = f"{col_b} – {range_text} Booking" if col_b and range_text else (col_b or range_text)
         if base and desc_month_year:
-            return f"{base} for {desc_month_year}"
-        return base or desc_month_year
+            base = f"{base} for {desc_month_year}"
+        else:
+            base = base or desc_month_year
+        if cs_description:
+            return f"{cs_description} – {base}" if base else cs_description
+        return base
 
     def _make_item(cs: CustomerProductAndService, qty: Decimal, rate: Decimal, description: str) -> _LineItem:
         ps = cs.product_and_service
@@ -543,14 +542,13 @@ def _build_line_items_for_center(
         )
 
     items: list[_LineItem] = []
-    dynamic_columns = dynamic_columns or {}
 
     for cs in customer_services:
         ps = cs.product_and_service
-        dynamic_column = dynamic_columns.get(cs.product_and_service_id)
+        dynamic_column = cs.sheet_column.name if cs.sheet_column else None
         raw_total = _get_quantity(center_metrics, dynamic_column)
         if raw_total is None:
-            continue  # product has no column mapping → skipped
+            continue  # row has no column mapped → skipped
 
         if cs.pricing_type == PricingType.slab:
             for slab in sorted(cs.slabs, key=lambda s: s.range_start):
@@ -558,11 +556,11 @@ def _build_line_items_for_center(
                     continue
                 qty = _slab_qty(raw_total, slab.range_start, slab.range_end)
                 range_text = _slab_range_desc(slab.range_start, slab.range_end)
-                items.append(_make_item(cs, qty, slab.rate, _slab_desc(range_text)))
+                items.append(_make_item(cs, qty, slab.rate, _slab_desc(range_text, cs.description)))
         else:
             if cs.rate is None or cs.rate <= 0:
                 continue
-            items.append(_make_item(cs, raw_total, cs.rate, _standard_desc()))
+            items.append(_make_item(cs, raw_total, cs.rate, _standard_desc(cs.description)))
 
     return [li for li in items if li.quantity > 0 and li.rate > 0]
 
@@ -575,7 +573,6 @@ def _build_qbo_invoice_payload(
     customer_services: list[CustomerProductAndService],
     inv_date: date,
     tax_code_id: str = "",
-    dynamic_columns: dict[int, str] | None = None,
 ) -> tuple[dict[str, Any], Decimal, list[_LineItem]] | None:
     """Build the QBO invoice payload with per-center line items."""
     due = _due_date(inv_date, customer.payment_terms_days)
@@ -602,7 +599,6 @@ def _build_qbo_invoice_payload(
             desc_month_year=dmyear,
             service_date=inv_date,
             tax_code_id=tax_code_id,
-            dynamic_columns=dynamic_columns,
         )
         all_line_items.extend(items)
 
@@ -693,11 +689,12 @@ def generate_invoices_from_parsed(
             .selectinload(CustomerProductAndService.product_and_service),
             selectinload(Customer.customer_services)
             .selectinload(CustomerProductAndService.slabs),
+            selectinload(Customer.customer_services)
+            .selectinload(CustomerProductAndService.sheet_column),
         )
         .all()
     )
     customer_by_id: dict[int, Customer] = {c.id: c for c in customers}
-    dynamic_columns = _load_dynamic_columns(db)
 
     invoices: list[Invoice] = (
         db.query(Invoice)
@@ -763,7 +760,6 @@ def generate_invoices_from_parsed(
                     result=result, is_standalone=True,
                     invoice_upload_id=invoice_upload_id,
                     tax_code_id=tax_code_id,
-                    dynamic_columns=dynamic_columns,
                     drive_files=drive_files,
                 )
             else:
@@ -775,7 +771,6 @@ def generate_invoices_from_parsed(
                     result=result, is_standalone=False,
                     invoice_upload_id=invoice_upload_id,
                     tax_code_id=tax_code_id,
-                    dynamic_columns=dynamic_columns,
                     drive_files=drive_files,
                 )
 
@@ -849,7 +844,6 @@ def _create_and_send(
     is_standalone: bool,
     invoice_upload_id: int | None = None,
     tax_code_id: str = "",
-    dynamic_columns: dict[int, str] | None = None,
     drive_files: dict[str, dict] | None = None,
 ) -> None:
     if is_standalone and len(center_names) == 1:
@@ -864,7 +858,6 @@ def _create_and_send(
         customer_services=customer_services,
         inv_date=inv_date,
         tax_code_id=tax_code_id,
-        dynamic_columns=dynamic_columns,
     )
     if built is None:
         result.errors.append(
@@ -993,11 +986,12 @@ def build_line_item_preview(body: "RevalidateRequest", db: Session) -> dict:
             .selectinload(CustomerProductAndService.product_and_service),
             selectinload(Customer.customer_services)
             .selectinload(CustomerProductAndService.slabs),
+            selectinload(Customer.customer_services)
+            .selectinload(CustomerProductAndService.sheet_column),
         )
         .all()
     )
     customer_by_id: dict[int, Customer] = {c.id: c for c in customers}
-    dynamic_columns = _load_dynamic_columns(db)
 
     invoices: list[Invoice] = (
         db.query(Invoice)
@@ -1053,7 +1047,6 @@ def build_line_item_preview(body: "RevalidateRequest", db: Session) -> dict:
                     customer_services=active_services,
                     desc_month_year=dmyear,
                     service_date=inv_date,
-                    dynamic_columns=dynamic_columns,
                 )
                 for li in items:
                     tax_amount = (li.amount * Decimal("0.1")).quantize(Decimal("0.0001"))

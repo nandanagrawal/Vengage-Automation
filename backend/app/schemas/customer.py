@@ -53,6 +53,12 @@ class CustomerServiceSlabResponse(BaseModel):
 
 class CustomerServiceInput(BaseModel):
     product_and_service_id: int
+    # Which RAW Data-Imaging sheet column this row reads its quantity from.
+    # Required — a row with no column produces no invoice line item.
+    sheet_column_id: int
+    # Optional free text, combined with the auto "{Center} for {Mon YY}" text
+    # in every QBO line-item description this row produces.
+    description: str | None = None
     pricing_type: Literal["flat", "slab"] = "flat"
     # Required (and >0) when pricing_type == "flat"; unused for "slab".
     rate: Decimal | None = Field(None, gt=0, description="Required when pricing_type is 'flat'")
@@ -80,6 +86,8 @@ class CustomerServiceResponse(BaseModel):
     id: int
     product_and_service_id: int
     name: str | None = None
+    sheet_column_id: int | None = None
+    column_header: str | None = None
     pricing_type: Literal["flat", "slab"]
     rate: Decimal | None = None
     description: str | None = None
@@ -252,9 +260,11 @@ def customer_response_from_row(row: Customer) -> CustomerResponse:
                     id=cs.id,
                     product_and_service_id=cs.product_and_service_id,
                     name=cs.product_and_service.name if cs.product_and_service else None,
+                    sheet_column_id=cs.sheet_column_id,
+                    column_header=cs.sheet_column.name if cs.sheet_column else None,
                     pricing_type=cs.pricing_type.value,
                     rate=cs.rate,
-                    description=cs.product_and_service.description if cs.product_and_service else None,
+                    description=cs.description,
                     slabs=[
                         CustomerServiceSlabResponse.model_validate(slab, from_attributes=True)
                         for slab in cs.slabs

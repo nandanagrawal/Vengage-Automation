@@ -4,7 +4,7 @@ import enum
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import DateTime, Enum, ForeignKey, Integer, Numeric, UniqueConstraint, func
+from sqlalchemy import DateTime, Enum, ForeignKey, Integer, Numeric, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
@@ -18,7 +18,15 @@ class PricingType(str, enum.Enum):
 class CustomerProductAndService(Base):
     __tablename__ = "customer_product_and_services"
     __table_args__ = (
-        UniqueConstraint("customer_id", "product_and_service_id", name="uq_customer_product"),
+        # The same product can now be mapped twice for one customer as long as it
+        # reads its quantity from a different sheet column — only the exact same
+        # (product, column) pair is rejected. Column mapping used to live globally
+        # on ProductColumnMapping (one column -> one product, for everyone); it now
+        # lives per customer-service row instead, see `sheet_column_id` below.
+        UniqueConstraint(
+            "customer_id", "product_and_service_id", "sheet_column_id",
+            name="uq_customer_product_column",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -37,6 +45,19 @@ class CustomerProductAndService(Base):
     # Only meaningful when pricing_type == flat. Slab rows carry their rates on `slabs` instead.
     rate: Mapped[Decimal | None] = mapped_column(Numeric(18, 4), nullable=True)
 
+    # Which RAW Data-Imaging sheet column this row reads its quantity from — see
+    # SheetColumn. Nullable at the DB level only for the transitional backfill
+    # window (scripts/backfill_customer_service_columns.py); the API requires it
+    # on every create/update going forward. A row with no column produces no
+    # invoice line item, same as the old unmapped-product behavior.
+    sheet_column_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("sheet_columns.id", ondelete="RESTRICT"), nullable=True, index=True
+    )
+    # Free text, combined with the auto-generated "{Center} for {Mon YY}" text in
+    # every QBO line-item description this row produces (and in the sheet
+    # preview) — see _standard_desc/_slab_desc in invoice_generation.py.
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -48,6 +69,7 @@ class CustomerProductAndService(Base):
     product_and_service: Mapped["ProductAndService"] = relationship(
         "ProductAndService", back_populates="customer_services"
     )
+    sheet_column: Mapped["SheetColumn | None"] = relationship("SheetColumn")
     slabs: Mapped[list["CustomerProductAndServiceSlab"]] = relationship(
         "CustomerProductAndServiceSlab",
         back_populates="customer_product_and_service",

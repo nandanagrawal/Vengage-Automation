@@ -1,9 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, require_admin
 from app.db.session import get_db
-from app.models.product_column_mapping import ProductColumnMapping
+from app.models.customer_product_and_service import CustomerProductAndService
 from app.models.sheet_column import SheetColumn
 from app.models.user import User
 from app.schemas.product_and_service import SheetColumnInput, SheetColumnResponse
@@ -12,12 +12,7 @@ router = APIRouter()
 
 
 def _to_response(row: SheetColumn) -> SheetColumnResponse:
-    mapping = row.product_mapping
-    return SheetColumnResponse(
-        id=row.id,
-        name=row.name,
-        mapped_product_name=mapping.product_and_service.name if mapping else None,
-    )
+    return SheetColumnResponse(id=row.id, name=row.name)
 
 
 @router.get("/sheet-columns", response_model=list[SheetColumnResponse])
@@ -25,14 +20,7 @@ def list_sheet_columns(
     db: Session = Depends(get_db),
     _user: User = Depends(get_current_user),
 ):
-    rows = (
-        db.query(SheetColumn)
-        .options(
-            selectinload(SheetColumn.product_mapping).selectinload(ProductColumnMapping.product_and_service)
-        )
-        .order_by(SheetColumn.name)
-        .all()
-    )
+    rows = db.query(SheetColumn).order_by(SheetColumn.name).all()
     return [_to_response(row) for row in rows]
 
 
@@ -68,15 +56,15 @@ def delete_sheet_column(
         raise HTTPException(status_code=404, detail="Column not found")
 
     in_use = (
-        db.query(ProductColumnMapping)
-        .filter(ProductColumnMapping.sheet_column_id == column_id)
+        db.query(CustomerProductAndService)
+        .filter(CustomerProductAndService.sheet_column_id == column_id)
         .first()
     )
     if in_use:
         raise HTTPException(
             status_code=409,
             detail=(
-                "Cannot delete: this column is mapped to a product. "
+                "Cannot delete: this column is mapped to a customer's service. "
                 "Clear that mapping first."
             ),
         )

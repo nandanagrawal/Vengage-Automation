@@ -12,6 +12,7 @@ from app.models.customer_product_and_service import (
 )
 from app.models.customer_type import CustomerType
 from app.models.product_and_service import ProductAndService
+from app.models.sheet_column import SheetColumn
 from app.schemas.customer import CustomerCreate, CustomerServiceInput, CustomerUpdate
 
 
@@ -21,14 +22,18 @@ def _apply_customer_service_links(
     if services is None:
         return
 
-    # Validate no duplicate product_and_service_id in the input list
-    seen_ps_ids: set[int] = set()
+    # Validate no duplicate (product_and_service_id, sheet_column_id) pair in
+    # the input list — the same product IS allowed twice now, as long as each
+    # occurrence reads its quantity from a different sheet column.
+    seen_pairs: set[tuple[int, int]] = set()
     for svc in services:
-        if svc.product_and_service_id in seen_ps_ids:
+        pair = (svc.product_and_service_id, svc.sheet_column_id)
+        if pair in seen_pairs:
             raise ValueError(
-                f"Duplicate product_and_service_id {svc.product_and_service_id} — each service can only appear once per customer."
+                f"Duplicate product_and_service_id {svc.product_and_service_id} with the same "
+                "sheet column — map it to a different column instead."
             )
-        seen_ps_ids.add(svc.product_and_service_id)
+        seen_pairs.add(pair)
 
     if not services:
         row.customer_services = []
@@ -44,6 +49,15 @@ def _apply_customer_service_links(
     if missing_ps:
         raise ValueError(f"Unknown product_and_service_ids: {missing_ps}")
 
+    # Validate all referenced sheet column IDs exist
+    col_ids = [s.sheet_column_id for s in services]
+    existing_col_ids = {
+        c.id for c in db.query(SheetColumn).filter(SheetColumn.id.in_(col_ids)).all()
+    }
+    missing_cols = sorted(set(col_ids) - existing_col_ids)
+    if missing_cols:
+        raise ValueError(f"Unknown sheet_column_ids: {missing_cols}")
+
     # Delete existing rows first and flush so the DB releases the unique slots
     # before we insert the replacement rows (avoids UniqueViolation on flush).
     row.customer_services.clear()
@@ -53,6 +67,8 @@ def _apply_customer_service_links(
         cps = CustomerProductAndService(
             customer_id=row.id,
             product_and_service_id=svc.product_and_service_id,
+            sheet_column_id=svc.sheet_column_id,
+            description=(svc.description or "").strip() or None,
             pricing_type=pricing_type,
             rate=svc.rate if pricing_type == PricingType.flat else None,
         )

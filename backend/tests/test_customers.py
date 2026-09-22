@@ -216,6 +216,12 @@ def test_sync_upserts_and_prunes_qbo_items(admin_client, fake_qbo):
     assert products2[0]["name"] == "Alpha Renamed"
 
 
+def _sheet_column_id(admin_client, name: str) -> int:
+    r = admin_client.post("/api/v1/sheet-columns", json={"name": name})
+    assert r.status_code == 201, r.text
+    return r.json()["id"]
+
+
 def test_customer_create_with_services(admin_client, db_session, fake_qbo):
     from app.models.service_code import ServiceCode
     sc = ServiceCode(code="TEST-SC", status=True)
@@ -226,17 +232,19 @@ def test_customer_create_with_services(admin_client, db_session, fake_qbo):
     fake_qbo.items = [{"Id": "10", "Name": "Widget", "Type": "Service", "Active": True, "SyncToken": "0"}]
     admin_client.post("/api/v1/sync/quickbooks")
     pid = admin_client.get("/api/v1/product-and-services").json()[0]["id"]
+    col_id = _sheet_column_id(admin_client, "Widget Col")
 
     r = admin_client.post(
         "/api/v1/customers",
         json={**_BASE, "display_name": "Linked Co", "customer_services": [
-            {"product_and_service_id": pid, "service_code_id": sc.id, "rate": "25.00"}
+            {"product_and_service_id": pid, "service_code_id": sc.id, "sheet_column_id": col_id, "rate": "25.00"}
         ]},
     )
     assert r.status_code == 200
     data = r.json()
     assert len(data["customer_services"]) == 1
     assert data["customer_services"][0]["product_and_service_id"] == pid
+    assert data["customer_services"][0]["sheet_column_id"] == col_id
     assert float(data["customer_services"][0]["rate"]) == 25.0
 
 
@@ -244,11 +252,12 @@ def test_customer_invalid_service_code_rejected(admin_client, fake_qbo):
     fake_qbo.items = [{"Id": "11", "Name": "Gadget", "Type": "Service", "Active": True, "SyncToken": "0"}]
     admin_client.post("/api/v1/sync/quickbooks")
     pid = admin_client.get("/api/v1/product-and-services").json()[0]["id"]
+    col_id = _sheet_column_id(admin_client, "Gadget Col")
 
     r = admin_client.post(
         "/api/v1/customers",
         json={**_BASE, "display_name": "Bad SC Co", "customer_services": [
-            {"product_and_service_id": pid, "service_code_id": 99999, "rate": "10.00"}
+            {"product_and_service_id": pid, "service_code_id": 99999, "sheet_column_id": col_id, "rate": "10.00"}
         ]},
     )
     assert r.status_code == 422
@@ -265,10 +274,11 @@ def _synced_product_id(admin_client, fake_qbo, qbo_item_id: str, name: str) -> i
 
 def test_customer_flat_pricing_defaults_and_round_trips(admin_client, fake_qbo):
     pid = _synced_product_id(admin_client, fake_qbo, "20", "Flat Widget")
+    col_id = _sheet_column_id(admin_client, "Flat Widget Col")
     r = admin_client.post(
         "/api/v1/customers",
         json={**_BASE, "display_name": "Flat Co", "customer_services": [
-            {"product_and_service_id": pid, "rate": "12.50"}
+            {"product_and_service_id": pid, "sheet_column_id": col_id, "rate": "12.50"}
         ]},
     )
     assert r.status_code == 200, r.text
@@ -280,11 +290,13 @@ def test_customer_flat_pricing_defaults_and_round_trips(admin_client, fake_qbo):
 
 def test_customer_slab_pricing_created_with_multiple_tiers(admin_client, fake_qbo):
     pid = _synced_product_id(admin_client, fake_qbo, "21", "Olivia AI Bookings for Imaging Workflow")
+    col_id = _sheet_column_id(admin_client, "Olivia Col")
     r = admin_client.post(
         "/api/v1/customers",
         json={**_BASE, "display_name": "Slab Co", "customer_services": [
             {
                 "product_and_service_id": pid,
+                "sheet_column_id": col_id,
                 "pricing_type": "slab",
                 "slabs": [
                     {"range_start": 1, "range_end": 1000, "rate": "5.00"},
@@ -305,10 +317,11 @@ def test_customer_slab_pricing_created_with_multiple_tiers(admin_client, fake_qb
 
 def test_customer_flat_pricing_requires_rate(admin_client, fake_qbo):
     pid = _synced_product_id(admin_client, fake_qbo, "22", "No Rate Widget")
+    col_id = _sheet_column_id(admin_client, "No Rate Col")
     r = admin_client.post(
         "/api/v1/customers",
         json={**_BASE, "display_name": "No Rate Co", "customer_services": [
-            {"product_and_service_id": pid}
+            {"product_and_service_id": pid, "sheet_column_id": col_id}
         ]},
     )
     assert r.status_code == 422
@@ -316,10 +329,11 @@ def test_customer_flat_pricing_requires_rate(admin_client, fake_qbo):
 
 def test_customer_slab_pricing_requires_at_least_one_tier(admin_client, fake_qbo):
     pid = _synced_product_id(admin_client, fake_qbo, "23", "Empty Slab Widget")
+    col_id = _sheet_column_id(admin_client, "Empty Slab Col")
     r = admin_client.post(
         "/api/v1/customers",
         json={**_BASE, "display_name": "Empty Slab Co", "customer_services": [
-            {"product_and_service_id": pid, "pricing_type": "slab", "slabs": []}
+            {"product_and_service_id": pid, "sheet_column_id": col_id, "pricing_type": "slab", "slabs": []}
         ]},
     )
     assert r.status_code == 422
@@ -327,11 +341,13 @@ def test_customer_slab_pricing_requires_at_least_one_tier(admin_client, fake_qbo
 
 def test_customer_slab_pricing_rejects_overlapping_ranges(admin_client, fake_qbo):
     pid = _synced_product_id(admin_client, fake_qbo, "24", "Overlap Widget")
+    col_id = _sheet_column_id(admin_client, "Overlap Col")
     r = admin_client.post(
         "/api/v1/customers",
         json={**_BASE, "display_name": "Overlap Co", "customer_services": [
             {
                 "product_and_service_id": pid,
+                "sheet_column_id": col_id,
                 "pricing_type": "slab",
                 "slabs": [
                     {"range_start": 1, "range_end": 1000, "rate": "5.00"},
@@ -341,6 +357,37 @@ def test_customer_slab_pricing_rejects_overlapping_ranges(admin_client, fake_qbo
         ]},
     )
     assert r.status_code == 422
+
+
+def test_customer_same_product_same_column_twice_rejected(admin_client, fake_qbo):
+    """The same product IS allowed twice now, but only if each occurrence
+    reads from a different sheet column — the exact same (product, column)
+    pair twice is still rejected."""
+    pid = _synced_product_id(admin_client, fake_qbo, "25", "Double Mapped Widget")
+    col_id = _sheet_column_id(admin_client, "Double Mapped Col")
+    r = admin_client.post(
+        "/api/v1/customers",
+        json={**_BASE, "display_name": "Same Column Twice Co", "customer_services": [
+            {"product_and_service_id": pid, "sheet_column_id": col_id, "rate": "10.00"},
+            {"product_and_service_id": pid, "sheet_column_id": col_id, "rate": "20.00"},
+        ]},
+    )
+    assert r.status_code == 422
+
+
+def test_customer_same_product_different_columns_allowed(admin_client, fake_qbo):
+    pid = _synced_product_id(admin_client, fake_qbo, "26", "Double Mapped Widget 2")
+    col_a = _sheet_column_id(admin_client, "Col A")
+    col_b = _sheet_column_id(admin_client, "Col B")
+    r = admin_client.post(
+        "/api/v1/customers",
+        json={**_BASE, "display_name": "Different Columns Co", "customer_services": [
+            {"product_and_service_id": pid, "sheet_column_id": col_a, "rate": "10.00"},
+            {"product_and_service_id": pid, "sheet_column_id": col_b, "rate": "20.00"},
+        ]},
+    )
+    assert r.status_code == 200, r.text
+    assert len(r.json()["customer_services"]) == 2
 
 
 def test_qbo_customer_payload_excludes_app_service_links():

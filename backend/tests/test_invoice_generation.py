@@ -16,7 +16,6 @@ from app.models.customer_product_and_service import (
 )
 from app.models.invoice import Invoice
 from app.models.product_and_service import ProductAndService
-from app.models.product_column_mapping import ProductColumnMapping
 from app.models.service_code import ServiceCode
 from app.models.sheet_column import SheetColumn
 from app.models.user import UserRole
@@ -114,61 +113,67 @@ def _make_product(db, name: str, qbo_id: str) -> ProductAndService:
     return ps
 
 
-def _set_column_mapping(db, ps: ProductAndService, column_header: str) -> ProductColumnMapping:
-    """Upsert: safe to call more than once for the same product (e.g. to
-    override the default mapping _link_service sets up)."""
-    sheet_col = db.query(SheetColumn).filter(SheetColumn.name == column_header).first()
-    if not sheet_col:
-        sheet_col = SheetColumn(name=column_header)
-        db.add(sheet_col)
+def _get_or_create_sheet_column(db, name: str) -> SheetColumn:
+    """Find-or-create a SheetColumn by exact name — the curated catalog
+    CustomerProductAndService.sheet_column_id points into."""
+    col = db.query(SheetColumn).filter(SheetColumn.name == name).first()
+    if not col:
+        col = SheetColumn(name=name)
+        db.add(col)
         db.commit()
-        db.refresh(sheet_col)
-    row = (
-        db.query(ProductColumnMapping)
-        .filter(ProductColumnMapping.product_and_service_id == ps.id)
-        .first()
-    )
-    if row:
-        row.sheet_column_id = sheet_col.id
-    else:
-        row = ProductColumnMapping(product_and_service_id=ps.id, sheet_column_id=sheet_col.id)
-        db.add(row)
-    db.commit()
-    db.refresh(row)
-    return row
+        db.refresh(col)
+    return col
 
 
-def _link_service(db, customer, ps, sc, rate: float, column: str | bool | None = None) -> CustomerProductAndService:
+def _link_service(
+    db, customer, ps, sc, rate: float,
+    column: str | bool | None = None, description: str | None = None,
+) -> CustomerProductAndService:
     # `sc` (ServiceCode) is accepted for call-site compatibility but no longer
     # linked — service_code_id was dropped from CustomerProductAndService.
     #
-    # `column`: quantity now resolves solely via ProductColumnMapping, so this
-    # helper sets one up too — defaulting to the product's own name (the
+    # `column`: quantity now resolves solely via this row's own sheet_column_id
+    # (moved off the old top-level ProductColumnMapping), so this helper sets
+    # one up too — defaulting to the product's own name (the
     # product-name-equals-column-header convention nearly every test here
     # uses). Pass an explicit name when the CSV column differs from the
-    # product name, or `column=False` to leave the product unmapped.
+    # product name, or `column=False` to leave the row unmapped. The same
+    # product can now be linked more than once for one customer as long as
+    # each occurrence uses a different column.
+    sheet_column_id = None
+    if column is not False:
+        sheet_column_id = _get_or_create_sheet_column(db, column or ps.name).id
     cps = CustomerProductAndService(
         customer_id=customer.id,
         product_and_service_id=ps.id,
         pricing_type=PricingType.flat,
         rate=Decimal(str(rate)),
+        sheet_column_id=sheet_column_id,
+        description=description,
     )
     db.add(cps)
     db.commit()
     db.refresh(cps)
-    if column is not False:
-        _set_column_mapping(db, ps, column or ps.name)
     return cps
 
 
 def _link_slab_service(
-    db, customer, ps, tiers: list[tuple[int, int | None, float]]
+    db, customer, ps, tiers: list[tuple[int, int | None, float]],
+    column: str | None = None, description: str | None = None,
 ) -> CustomerProductAndService:
-    """tiers: list of (range_start, range_end_or_None, rate)."""
+    """tiers: list of (range_start, range_end_or_None, rate).
+
+    `column`: optional sheet column to map this row to. Unlike `_link_service`
+    this defaults to leaving the row unmapped — every existing caller sets its
+    own column explicitly.
+    """
+    sheet_column_id = _get_or_create_sheet_column(db, column).id if column else None
     cps = CustomerProductAndService(
         customer_id=customer.id,
         product_and_service_id=ps.id,
         pricing_type=PricingType.slab,
+        sheet_column_id=sheet_column_id,
+        description=description,
     )
     cps.slabs = [
         CustomerProductAndServiceSlab(range_start=start, range_end=end, rate=Decimal(str(rate)))
@@ -630,8 +635,8 @@ def test_slab_pricing_distributes_quantity_across_tiers(db_session):
     _link_slab_service(
         db_session, customer, ps,
         [(1, 1000, 5.0), (1001, 2500, 4.0), (2501, None, 3.0)],
+        column="Confirmed Appointment (4)",
     )
-    _set_column_mapping(db_session, ps, "Confirmed Appointment (4)")
 
     qbo = FakeQBO()
     csv_bytes = _make_raw_csv(
@@ -666,8 +671,10 @@ def test_slab_pricing_below_first_tier_skips_all_line_items(db_session):
     customer = _make_customer(db_session, "Low Slab Co", qbo_id="qbo-lowslab", email="low@low.com")
     _make_center(db_session, customer.id, "PAR")
     ps = _make_product(db_session, "Olivia AI Bookings for Imaging Workflow", "qbo-olivia-low")
-    _link_slab_service(db_session, customer, ps, [(1001, 2500, 4.0), (2501, None, 3.0)])
-    _set_column_mapping(db_session, ps, "Confirmed Appointment (4)")
+    _link_slab_service(
+        db_session, customer, ps, [(1001, 2500, 4.0), (2501, None, 3.0)],
+        column="Confirmed Appointment (4)",
+    )
 
     qbo = FakeQBO()
     csv_bytes = _make_raw_csv(
@@ -687,8 +694,10 @@ def test_flat_and_slab_services_coexist_on_same_customer(db_session):
     flat_ps = _make_product(db_session, "Gardening", "qbo-flat-1")
     slab_ps = _make_product(db_session, "Olivia AI Bookings for Imaging Workflow", "qbo-slab-1")
     _link_service(db_session, customer, flat_ps, sc, 2.0)
-    _link_slab_service(db_session, customer, slab_ps, [(1, 1000, 5.0), (1001, None, 3.0)])
-    _set_column_mapping(db_session, slab_ps, "Confirmed Appointment (4)")
+    _link_slab_service(
+        db_session, customer, slab_ps, [(1, 1000, 5.0), (1001, None, 3.0)],
+        column="Confirmed Appointment (4)",
+    )
 
     qbo = FakeQBO()
     csv_bytes = _make_raw_csv(
@@ -749,8 +758,8 @@ def test_dynamic_column_mapping_missing_column_skips_line_item(db_session):
 
 
 def test_unmapped_product_produces_no_line_item(db_session):
-    """A product with no ProductColumnMapping row at all is skipped — quantity
-    resolution is dynamic-mapping-only, no name-based fallback of any kind."""
+    """A customer-service row with no sheet_column_id set at all is skipped —
+    quantity resolution is dynamic-mapping-only, no name-based fallback of any kind."""
     sc = _make_service_code(db_session, "B0005")
     customer = _make_customer(db_session, "No Dynamic Co", qbo_id="qbo-nodyn", email="nodyn@nodyn.com")
     _make_center(db_session, customer.id, "PAR")
@@ -767,6 +776,101 @@ def test_unmapped_product_produces_no_line_item(db_session):
     result = generate_invoices(db_session, qbo, "tok", "realm", "f.csv", csv_bytes)
 
     assert result.invoices_created == 0
+
+
+# ── Same product mapped twice / per-row description ───────────────────────────
+
+def test_same_product_mapped_twice_with_different_columns_produces_two_line_items(db_session):
+    """The same product can now be linked twice for one customer as long as
+    each occurrence reads its quantity from a different sheet column — each
+    is its own independent line item."""
+    sc = _make_service_code(db_session, "B0006")
+    customer = _make_customer(db_session, "Double Mapped Co", qbo_id="qbo-double", email="double@double.com")
+    _make_center(db_session, customer.id, "PAR")
+    ps = _make_product(db_session, "Olivia AI - Provisional bookings for Imaging workflow B0001", "qbo-double1")
+    _link_service(db_session, customer, ps, sc, 5.0, column="Provisional Appointment (5)")
+    _link_service(db_session, customer, ps, sc, 7.0, column="Confirmed Appointment (4)")
+
+    qbo = FakeQBO()
+    csv_bytes = _make_raw_csv(
+        [("PAR", {"Provisional Appointment (5)": 10, "Confirmed Appointment (4)": 20})],
+        ["Provisional Appointment (5)", "Confirmed Appointment (4)"],
+    )
+    result = generate_invoices(db_session, qbo, "tok", "realm", "f.csv", csv_bytes)
+
+    assert result.invoices_created == 1
+    lines = qbo.invoices[0]["Line"]
+    assert len(lines) == 2
+    by_qty = {l["SalesItemLineDetail"]["Qty"]: l for l in lines}
+    assert by_qty[10.0]["Amount"] == pytest.approx(50.0)
+    assert by_qty[20.0]["Amount"] == pytest.approx(140.0)
+
+
+def test_description_prefixes_flat_line_item(db_session):
+    """A customer-service row's own description is combined with the auto
+    "{Center} for {Mon YY}" text, not a replacement for it."""
+    sc = _make_service_code(db_session, "B0007")
+    customer = _make_customer(db_session, "Described Flat Co", qbo_id="qbo-descflat", email="df@df.com")
+    _make_center(db_session, customer.id, "PAR")
+    ps = _make_product(db_session, "Gardening", "qbo-descflat1")
+    _link_service(db_session, customer, ps, sc, 2.0, description="Provisional bookings")
+
+    qbo = FakeQBO()
+    csv_bytes = _make_raw_csv([("PAR", {"Gardening": 10})], ["Gardening"])
+    result = generate_invoices(db_session, qbo, "tok", "realm", "f.csv", csv_bytes)
+
+    today = date.today()
+    first_of_current = today.replace(day=1)
+    month_label = (first_of_current - timedelta(days=1)).strftime("%b %y")
+
+    assert result.invoices_created == 1
+    desc = qbo.invoices[0]["Line"][0]["Description"]
+    assert desc == f"Provisional bookings – X for {month_label}"
+
+
+def test_description_prefixes_slab_line_item(db_session):
+    sc = _make_service_code(db_session, "B0008")
+    customer = _make_customer(db_session, "Described Slab Co", qbo_id="qbo-descslab", email="ds@ds.com")
+    _make_center(db_session, customer.id, "PAR")
+    ps = _make_product(db_session, "Olivia AI Bookings for Imaging Workflow", "qbo-descslab1")
+    _link_slab_service(
+        db_session, customer, ps, [(1, 1000, 5.0)],
+        column="Confirmed Appointment (4)", description="Imaging bookings",
+    )
+
+    qbo = FakeQBO()
+    csv_bytes = _make_raw_csv([("PAR", {"Confirmed Appointment (4)": 500})], ["Confirmed Appointment (4)"])
+    result = generate_invoices(db_session, qbo, "tok", "realm", "f.csv", csv_bytes)
+
+    today = date.today()
+    first_of_current = today.replace(day=1)
+    month_label = (first_of_current - timedelta(days=1)).strftime("%b %y")
+
+    assert result.invoices_created == 1
+    desc = qbo.invoices[0]["Line"][0]["Description"]
+    assert desc == f"Imaging bookings – X – 1-1000 Booking for {month_label}"
+
+
+def test_no_description_leaves_output_unchanged(db_session):
+    """Regression guard: a row with no description produces exactly today's
+    "{Center} for {Mon YY}" text, with no leading separator."""
+    sc = _make_service_code(db_session, "B0009")
+    customer = _make_customer(db_session, "Plain Co", qbo_id="qbo-plain", email="plain@plain.com")
+    _make_center(db_session, customer.id, "PAR")
+    ps = _make_product(db_session, "Gardening", "qbo-plain1")
+    _link_service(db_session, customer, ps, sc, 2.0)  # description=None
+
+    qbo = FakeQBO()
+    csv_bytes = _make_raw_csv([("PAR", {"Gardening": 10})], ["Gardening"])
+    result = generate_invoices(db_session, qbo, "tok", "realm", "f.csv", csv_bytes)
+
+    today = date.today()
+    first_of_current = today.replace(day=1)
+    month_label = (first_of_current - timedelta(days=1)).strftime("%b %y")
+
+    assert result.invoices_created == 1
+    desc = qbo.invoices[0]["Line"][0]["Description"]
+    assert desc == f"X for {month_label}"
 
 
 # ── Drive attachment ───────────────────────────────────────────────────────────

@@ -188,6 +188,10 @@ export type CustomerServiceRow = {
   id: number;
   product_and_service_id: number;
   name: string | null;
+  // Which RAW Data-Imaging sheet column this row reads its quantity from —
+  // set per customer-service row now, not globally per product.
+  sheet_column_id: number | null;
+  column_header: string | null;
   pricing_type: PricingType;
   rate: string | null;
   description: string | null;
@@ -207,17 +211,11 @@ export type ProductAndServiceRow = {
   item_type: string | null;
   active: boolean;
   description: string | null;
-  // Admin-configured exact spreadsheet column override. Null = still uses the
-  // hardcoded PRODUCT_COLUMN_MAP / diff / fixed-quantity logic on the backend.
-  sheet_column_id: number | null;
-  column_header: string | null;
 };
 
 export type SheetColumnRow = {
   id: number;
   name: string;
-  // Set when this column is already assigned to a different product.
-  mapped_product_name: string | null;
 };
 
 export type CenterRow = {

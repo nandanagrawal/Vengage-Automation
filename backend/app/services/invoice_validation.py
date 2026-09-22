@@ -79,6 +79,8 @@ def _run_validation(
             .selectinload(CustomerProductAndService.product_and_service),
             selectinload(Customer.customer_services)
             .selectinload(CustomerProductAndService.slabs),
+            selectinload(Customer.customer_services)
+            .selectinload(CustomerProductAndService.sheet_column),
         )
         .all()
     ) if customer_ids else []

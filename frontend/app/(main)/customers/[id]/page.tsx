@@ -54,6 +54,7 @@ function slabRangeLabel(start: number, end: number | null) {
 
 function ServiceRow({ svc }: { svc: CustomerServiceRow }) {
   const isSlab = svc.pricing_type === "slab";
+  const isFixed = svc.pricing_type === "fixed";
   return (
     <div style={{
       padding: "10px 14px", borderRadius: 8,
@@ -67,12 +68,12 @@ function ServiceRow({ svc }: { svc: CustomerServiceRow }) {
             </span>
             <span style={{
               flexShrink: 0, fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.4,
-              color: isSlab ? "var(--primary)" : "var(--text-3)",
-              background: isSlab ? "var(--primary-bg)" : "var(--surface-2)",
+              color: isSlab || isFixed ? "var(--primary)" : "var(--text-3)",
+              background: isSlab || isFixed ? "var(--primary-bg)" : "var(--surface-2)",
               border: "1px solid var(--border)",
               padding: "1px 6px", borderRadius: 5,
             }}>
-              {isSlab ? "Slab" : "Flat"}
+              {isSlab ? "Slab" : isFixed ? "Fixed" : "Flat"}
             </span>
             {svc.column_header && (
               <span style={{
@@ -96,6 +97,7 @@ function ServiceRow({ svc }: { svc: CustomerServiceRow }) {
             color: "var(--success)", background: "var(--success-bg)",
             padding: "2px 9px", borderRadius: 6,
           }}>
+            {isFixed && svc.quantity != null ? `${parseFloat(String(svc.quantity))} × ` : ""}
             ${svc.rate != null ? Number(svc.rate).toFixed(3) : "—"}
           </span>
         )}

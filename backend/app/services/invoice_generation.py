@@ -27,6 +27,14 @@ a fixed quantity, or guessed by name. The same product can be mapped twice
 for one customer against two different columns — each occurrence is its own
 row with its own column, so both produce independent line items.
 
+Fixed pricing
+-------------
+A customer-service row with pricing_type "fixed" reads NO sheet column: it bills
+its configured quantity x rate, described as "{description} for {Mon} {YY}".
+Fixed lines belong to the customer, not a centre, so they're added to ONE
+invoice per customer per run (the first invoice actually created), never once
+per centre.
+
 Invoice grouping
 ----------------
 Existing Invoice groupings define which centers produce one combined invoice.
@@ -377,10 +385,15 @@ def _normalize_product_name(name_lower: str) -> str:
 
 
 def _has_valid_pricing(cs: CustomerProductAndService) -> bool:
-    """True if this mapping has a usable rate — a positive flat rate, or at
-    least one slab tier with a positive rate."""
+    """True if this mapping has a usable rate — a positive flat rate, at least
+    one slab tier with a positive rate, or (fixed) a positive rate AND quantity."""
     if cs.pricing_type == PricingType.slab:
         return any(slab.rate is not None and slab.rate > 0 for slab in cs.slabs)
+    if cs.pricing_type == PricingType.fixed:
+        return (
+            cs.rate is not None and cs.rate > 0
+            and cs.quantity is not None and cs.quantity > 0
+        )
     return cs.rate is not None and cs.rate > 0
 
 
@@ -465,6 +478,77 @@ class GenerationResult:
         }
 
 
+def _make_line_item(
+    cs: CustomerProductAndService,
+    qty: Decimal,
+    rate: Decimal,
+    description: str,
+    *,
+    center_name: str,
+    service_date: date,
+    tax_code_id: str = "",
+) -> _LineItem:
+    """One QBO SalesItemLine + its in-app mirror, for a customer-service row."""
+    ps = cs.product_and_service
+    amount = (qty * rate).quantize(Decimal("0.01"))
+    qty_f = float(qty)
+    rate_f = float(rate)
+    # QBO validates Amount == UnitPrice * Qty using its own float arithmetic.
+    # Derive Amount from the same float values we send so rounding matches.
+    qbo_amount = round(qty_f * rate_f, 2)
+    qbo_payload: dict[str, Any] = {
+        "DetailType": "SalesItemLineDetail",
+        "Description": description,
+        "Amount": qbo_amount,
+        "SalesItemLineDetail": {
+            "ItemRef": {"value": ps.qbo_id},
+            "Qty": qty_f,
+            "UnitPrice": rate_f,
+            "TaxCodeRef": {"value": tax_code_id or settings.QBO_LINE_TAX_CODE},
+            "ServiceDate": service_date.isoformat(),
+        },
+    }
+    return _LineItem(
+        product_and_service_id=ps.id,
+        product_name=ps.name,
+        center_name=center_name,
+        description=description,
+        quantity=qty,
+        rate=rate,
+        amount=amount,
+        qbo_payload=qbo_payload,
+    )
+
+
+def _build_fixed_line_items(
+    customer_services: list[CustomerProductAndService],
+    desc_month_year: str,
+    service_date: date,
+    tax_code_id: str = "",
+) -> list[_LineItem]:
+    """One line item per fixed-pricing row: its configured quantity x rate, no
+    sheet column involved. Description is "{description} for {Mon YY}" (or
+    "{product name} for {Mon YY}" when the row has none).
+
+    Fixed charges belong to the customer, not to a centre — callers add these
+    to a customer's invoices ONCE per run (see include_fixed on
+    _build_qbo_invoice_payload), not once per centre or per invoice.
+    """
+    items: list[_LineItem] = []
+    for cs in customer_services:
+        if cs.pricing_type != PricingType.fixed or not _has_valid_pricing(cs):
+            continue
+        base = cs.description or cs.product_and_service.name
+        description = f"{base} for {desc_month_year}" if desc_month_year else base
+        items.append(
+            _make_line_item(
+                cs, cs.quantity, cs.rate, description,
+                center_name="", service_date=service_date, tax_code_id=tax_code_id,
+            )
+        )
+    return items
+
+
 def _build_line_items_for_center(
     center_name: str,
     center_metrics: dict[str, Decimal],
@@ -511,39 +595,16 @@ def _build_line_items_for_center(
         return base
 
     def _make_item(cs: CustomerProductAndService, qty: Decimal, rate: Decimal, description: str) -> _LineItem:
-        ps = cs.product_and_service
-        amount = (qty * rate).quantize(Decimal("0.01"))
-        qty_f = float(qty)
-        rate_f = float(rate)
-        # QBO validates Amount == UnitPrice * Qty using its own float arithmetic.
-        # Derive Amount from the same float values we send so rounding matches.
-        qbo_amount = round(qty_f * rate_f, 2)
-        qbo_payload: dict[str, Any] = {
-            "DetailType": "SalesItemLineDetail",
-            "Description": description,
-            "Amount": qbo_amount,
-            "SalesItemLineDetail": {
-                "ItemRef": {"value": ps.qbo_id},
-                "Qty": qty_f,
-                "UnitPrice": rate_f,
-                "TaxCodeRef": {"value": tax_code_id or settings.QBO_LINE_TAX_CODE},
-                "ServiceDate": service_date.isoformat(),
-            },
-        }
-        return _LineItem(
-            product_and_service_id=ps.id,
-            product_name=ps.name,
-            center_name=center_name,
-            description=description,
-            quantity=qty,
-            rate=rate,
-            amount=amount,
-            qbo_payload=qbo_payload,
+        return _make_line_item(
+            cs, qty, rate, description,
+            center_name=center_name, service_date=service_date, tax_code_id=tax_code_id,
         )
 
     items: list[_LineItem] = []
 
     for cs in customer_services:
+        if cs.pricing_type == PricingType.fixed:
+            continue  # fixed rows read no sheet column — added once per customer, see _build_fixed_line_items
         ps = cs.product_and_service
         dynamic_column = cs.sheet_column.name if cs.sheet_column else None
         raw_total = _get_quantity(center_metrics, dynamic_column)
@@ -573,8 +634,11 @@ def _build_qbo_invoice_payload(
     customer_services: list[CustomerProductAndService],
     inv_date: date,
     tax_code_id: str = "",
+    include_fixed: bool = False,
 ) -> tuple[dict[str, Any], Decimal, list[_LineItem]] | None:
-    """Build the QBO invoice payload with per-center line items."""
+    """Build the QBO invoice payload with per-center line items, plus — when
+    `include_fixed` — the customer's fixed-pricing lines (added once per
+    customer per run, so the caller decides which invoice carries them)."""
     due = _due_date(inv_date, customer.payment_terms_days)
     memo = _memo(inv_date)
     memo_stmt = _memo_on_statement(inv_date)
@@ -601,6 +665,11 @@ def _build_qbo_invoice_payload(
             tax_code_id=tax_code_id,
         )
         all_line_items.extend(items)
+
+    if include_fixed:
+        all_line_items.extend(
+            _build_fixed_line_items(customer_services, dmyear, inv_date, tax_code_id)
+        )
 
     if not all_line_items:
         return None
@@ -747,8 +816,14 @@ def generate_invoices_from_parsed(
             key = inv.id if inv else None
             group_map.setdefault(key, []).append(name_lower)
 
+        # A customer's fixed charges go on ONE of its invoices per run — the
+        # first one that actually gets created — so a customer with several
+        # standalone centres isn't billed the same fixed charge repeatedly.
+        fixed_pending = any(cs.pricing_type == PricingType.fixed for cs in active_services)
+
         for group_key, group_name_lowers in group_map.items():
             group_center_names = [center_by_name[n].name for n in group_name_lowers]
+            created_before = result.invoices_created
 
             if group_key is None:
                 standalone_names = [center_by_name[n].name for n in group_name_lowers]
@@ -761,6 +836,7 @@ def generate_invoices_from_parsed(
                     invoice_upload_id=invoice_upload_id,
                     tax_code_id=tax_code_id,
                     drive_files=drive_files,
+                    include_fixed=fixed_pending,
                 )
             else:
                 _create_and_send(
@@ -772,7 +848,11 @@ def generate_invoices_from_parsed(
                     invoice_upload_id=invoice_upload_id,
                     tax_code_id=tax_code_id,
                     drive_files=drive_files,
+                    include_fixed=fixed_pending,
                 )
+
+            if result.invoices_created > created_before:
+                fixed_pending = False
 
     return result
 
@@ -845,6 +925,7 @@ def _create_and_send(
     invoice_upload_id: int | None = None,
     tax_code_id: str = "",
     drive_files: dict[str, dict] | None = None,
+    include_fixed: bool = False,
 ) -> None:
     if is_standalone and len(center_names) == 1:
         label = f"{center_names[0]} (standalone)"
@@ -858,6 +939,7 @@ def _create_and_send(
         customer_services=customer_services,
         inv_date=inv_date,
         tax_code_id=tax_code_id,
+        include_fixed=include_fixed,
     )
     if built is None:
         result.errors.append(
@@ -1036,18 +1118,14 @@ def build_line_item_preview(body: "RevalidateRequest", db: Session) -> dict:
             key = center_id_to_inv.get(ctr.id)
             group_map.setdefault(key.id if key else None, []).append(name_lower)
 
+        # Mirrors generate_invoices_from_parsed: a customer's fixed charges ride
+        # on the first invoice that gets produced, not on every one.
+        fixed_pending = any(cs.pricing_type == PricingType.fixed for cs in active_services)
+
         for _group_key, group_names_lower in group_map.items():
             line_items: list[dict] = []
-            for name_lower in group_names_lower:
-                center_metrics = parsed.rows.get(name_lower, {})
-                center_col1_name = parsed.center_col1_names.get(name_lower) or name_lower
-                items = _build_line_items_for_center(
-                    center_name=center_col1_name,
-                    center_metrics=center_metrics,
-                    customer_services=active_services,
-                    desc_month_year=dmyear,
-                    service_date=inv_date,
-                )
+
+            def _add_preview_lines(items: list[_LineItem]) -> None:
                 for li in items:
                     tax_amount = (li.amount * Decimal("0.1")).quantize(Decimal("0.0001"))
                     line_items.append({
@@ -1060,7 +1138,24 @@ def build_line_item_preview(body: "RevalidateRequest", db: Session) -> dict:
                         "tax_code": "GST",
                     })
 
+            for name_lower in group_names_lower:
+                center_metrics = parsed.rows.get(name_lower, {})
+                center_col1_name = parsed.center_col1_names.get(name_lower) or name_lower
+                _add_preview_lines(_build_line_items_for_center(
+                    center_name=center_col1_name,
+                    center_metrics=center_metrics,
+                    customer_services=active_services,
+                    desc_month_year=dmyear,
+                    service_date=inv_date,
+                ))
+
+            if fixed_pending:
+                _add_preview_lines(
+                    _build_fixed_line_items(active_services, dmyear, inv_date)
+                )
+
             if line_items:
+                fixed_pending = False
                 inv_offset += 1
                 result_invoices.append({
                     "invoice_no": last_invoice_no_int + inv_offset,

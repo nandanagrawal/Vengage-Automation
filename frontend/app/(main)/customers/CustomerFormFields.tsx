@@ -30,10 +30,11 @@ function newSlabLine(): SlabLine {
 export type ServiceRow = {
   key: string;
   product_and_service_id: number | "";
-  sheet_column_id: number | "";   // which sheet column this row reads its quantity from
-  description: string;            // combined with the auto "{Center} for {Mon YY}" text
+  sheet_column_id: number | "";   // which sheet column this row reads its quantity from (unused for "fixed")
+  description: string;            // flat/slab: combined with the auto "{Center} for {Mon YY}" text; fixed: combined with the month
   pricing_type: PricingType;
-  rate: string;        // used when pricing_type === "flat"
+  rate: string;        // used when pricing_type === "flat" or "fixed"
+  quantity: string;    // used when pricing_type === "fixed"
   slabs: SlabLine[];   // used when pricing_type === "slab"
 };
 
@@ -44,7 +45,7 @@ function newServiceRow(): ServiceRow {
       : `sr-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   return {
     key, product_and_service_id: "", sheet_column_id: "", description: "",
-    pricing_type: "flat", rate: "", slabs: [],
+    pricing_type: "flat", rate: "", quantity: "", slabs: [],
   };
 }
 
@@ -206,6 +207,7 @@ export function useCustomerForm(mode: "create" | "edit", customer: CustomerRow |
           description: cs.description ?? "",
           pricing_type: cs.pricing_type,
           rate: cs.rate != null ? parseFloat(String(cs.rate)).toFixed(2) : "",
+          quantity: cs.quantity != null ? String(parseFloat(String(cs.quantity))) : "",
           slabs: (cs.slabs ?? []).map((s) => ({
             key: `slab-${s.id}`,
             range_start: String(s.range_start),
@@ -375,13 +377,22 @@ export function useCustomerForm(mode: "create" | "edit", customer: CustomerRow |
     // Validate service rows: a sheet column is required; flat needs a rate > 0;
     // slab needs >=1 range, each with a positive rate.
     const rowsWithProduct = serviceRows.filter((r) => r.product_and_service_id !== "");
-    const missingColumn = rowsWithProduct.find((r) => r.sheet_column_id === "");
+    // Fixed rows read no sheet column, so the column rules below skip them.
+    const missingColumn = rowsWithProduct.find((r) => r.pricing_type !== "fixed" && r.sheet_column_id === "");
     if (missingColumn) {
-      setServiceError("Choose a sheet column for each service — that's what its quantity is read from.");
+      setServiceError("Choose a sheet column for each flat/slab service — that's what its quantity is read from.");
+      return null;
+    }
+    const badFixed = rowsWithProduct.find(
+      (r) => r.pricing_type === "fixed" && (!(parseFloat(r.quantity) > 0) || !(parseFloat(r.rate) > 0)),
+    );
+    if (badFixed) {
+      setServiceError("Fixed services need a quantity and a rate, both greater than 0.");
       return null;
     }
     const seenPairs = new Set<string>();
     for (const r of rowsWithProduct) {
+      if (r.pricing_type === "fixed") continue;
       const pairKey = `${r.product_and_service_id}:${r.sheet_column_id}`;
       if (seenPairs.has(pairKey)) {
         setServiceError("The same product and column are mapped twice — pick a different column for one of them.");
@@ -422,27 +433,29 @@ export function useCustomerForm(mode: "create" | "edit", customer: CustomerRow |
     }
     setServiceError(null);
 
-    const validServices = rowsWithProduct.map((r) =>
-      r.pricing_type === "flat"
-        ? {
-            product_and_service_id: r.product_and_service_id as number,
-            sheet_column_id: r.sheet_column_id as number,
-            description: r.description.trim() || undefined,
-            pricing_type: "flat",
-            rate: r.rate,
-          }
-        : {
-            product_and_service_id: r.product_and_service_id as number,
-            sheet_column_id: r.sheet_column_id as number,
-            description: r.description.trim() || undefined,
-            pricing_type: "slab",
-            slabs: r.slabs.map((s) => ({
-              range_start: Math.trunc(parseFloat(s.range_start)),
-              range_end: s.range_end ? Math.trunc(parseFloat(s.range_end)) : null,
-              rate: s.rate,
-            })),
-          },
-    );
+    const validServices = rowsWithProduct.map((r) => {
+      const base = {
+        product_and_service_id: r.product_and_service_id as number,
+        description: r.description.trim() || undefined,
+      };
+      if (r.pricing_type === "fixed") {
+        // No sheet_column_id: the backend rejects one on a fixed row.
+        return { ...base, pricing_type: "fixed", quantity: r.quantity, rate: r.rate };
+      }
+      if (r.pricing_type === "flat") {
+        return { ...base, sheet_column_id: r.sheet_column_id as number, pricing_type: "flat", rate: r.rate };
+      }
+      return {
+        ...base,
+        sheet_column_id: r.sheet_column_id as number,
+        pricing_type: "slab",
+        slabs: r.slabs.map((s) => ({
+          range_start: Math.trunc(parseFloat(s.range_start)),
+          range_end: s.range_end ? Math.trunc(parseFloat(s.range_end)) : null,
+          rate: s.rate,
+        })),
+      };
+    });
 
     const payload: Record<string, unknown> = {
       title: form.title || undefined,
@@ -741,9 +754,10 @@ export function CustomerFormFields({ api, mode }: { api: CustomerFormApi; mode: 
         <div className="mb-5">
           <label className={labelCls()}>Services &amp; rates</label>
           <p className="text-[11px] text-gray-400 mb-2">
-            Select a product/service and the sheet column it reads its quantity from, then choose Flat (one rate)
-            or Slab (multiple ranges, each with its own rate). The same product can be added more than once as
-            long as each occurrence uses a different column.
+            Select a product/service, then its booking type. Flat (one rate) and Slab (multiple ranges, each with
+            its own rate) read their quantity from the sheet column you pick; the same product can be added more
+            than once as long as each occurrence uses a different column. Fixed is for a charge that isn&apos;t in
+            the sheet: enter its quantity and rate, and it&apos;s added to the customer&apos;s invoice every run.
           </p>
 
           {serviceRows.length > 0 && (
@@ -752,7 +766,7 @@ export function CustomerFormFields({ api, mode }: { api: CustomerFormApi; mode: 
                 const pairKey = `${row.product_and_service_id}:${row.sheet_column_id}`;
                 return (
                   <div key={row.key} className="px-3 py-2.5">
-                    <div className="grid grid-cols-[minmax(0,1.6fr)_minmax(0,1.3fr)_5.5rem_minmax(0,1.1fr)_1.5rem] gap-2 items-center">
+                    <div className="grid grid-cols-[minmax(0,1.6fr)_5.5rem_minmax(0,1.3fr)_minmax(0,1.1fr)_1.5rem] gap-2 items-center">
                       {/* Product dropdown */}
                       <select
                         value={row.product_and_service_id === "" ? "" : String(row.product_and_service_id)}
@@ -770,7 +784,35 @@ export function CustomerFormFields({ api, mode }: { api: CustomerFormApi; mode: 
                         ))}
                       </select>
 
-                      {/* Sheet column dropdown */}
+                      {/* Booking type (Flat / Slab / Fixed) — right after the product, since it decides what the next fields ask for */}
+                      <select
+                        value={row.pricing_type}
+                        aria-label="Booking type"
+                        title="Booking type"
+                        onChange={(e) => {
+                          const next = e.target.value as PricingType;
+                          // A fixed row reads no column — drop any stale pick so it can't leak into the payload.
+                          updateServiceRow(row.key, next === "fixed" ? { pricing_type: next, sheet_column_id: "" } : { pricing_type: next });
+                        }}
+                        className="rounded-lg bg-white border border-gray-200 px-2 py-1.5 text-xs text-gray-900 focus:outline-none focus:ring-1 focus:ring-indigo-200 appearance-none"
+                      >
+                        <option value="flat" style={{ background: "white", color: "var(--text-2)" }}>Flat</option>
+                        <option value="slab" style={{ background: "white", color: "var(--text-2)" }}>Slab</option>
+                        <option value="fixed" style={{ background: "white", color: "var(--text-2)" }}>Fixed</option>
+                      </select>
+
+                      {/* Fixed rows bill a set quantity and read no sheet column; flat/slab pick the column they read */}
+                      {row.pricing_type === "fixed" ? (
+                        <input
+                          type="number"
+                          min="0.01"
+                          step="any"
+                          placeholder="Quantity"
+                          value={row.quantity}
+                          onChange={(e) => updateServiceRow(row.key, { quantity: e.target.value })}
+                          className="rounded-lg bg-white border border-gray-200 px-2 py-1.5 text-xs text-gray-900 focus:outline-none focus:ring-1 focus:ring-indigo-200"
+                        />
+                      ) : (
                       <select
                         value={row.sheet_column_id === "" ? "" : String(row.sheet_column_id)}
                         onChange={(e) => {
@@ -799,18 +841,9 @@ export function CustomerFormFields({ api, mode }: { api: CustomerFormApi; mode: 
                           );
                         })}
                       </select>
+                      )}
 
-                      {/* Flat / Slab */}
-                      <select
-                        value={row.pricing_type}
-                        onChange={(e) => updateServiceRow(row.key, { pricing_type: e.target.value as "flat" | "slab" })}
-                        className="rounded-lg bg-white border border-gray-200 px-2 py-1.5 text-xs text-gray-900 focus:outline-none focus:ring-1 focus:ring-indigo-200 appearance-none"
-                      >
-                        <option value="flat" style={{ background: "white", color: "var(--text-2)" }}>Flat</option>
-                        <option value="slab" style={{ background: "white", color: "var(--text-2)" }}>Slab</option>
-                      </select>
-
-                      {row.pricing_type === "flat" ? (
+                      {row.pricing_type === "flat" || row.pricing_type === "fixed" ? (
                         <input
                           type="number"
                           min="0.01"
@@ -841,10 +874,14 @@ export function CustomerFormFields({ api, mode }: { api: CustomerFormApi; mode: 
                       </button>
                     </div>
 
-                    {/* Description — combined with the auto "{Center} for {Mon YY}" text on every QBO line this row produces */}
+                    {/* Description — flat/slab: combined with the auto "{Center} for {Mon YY}" text; fixed: combined with the month */}
                     <input
                       type="text"
-                      placeholder="Description (optional) — combined with the auto centre/month text on the invoice"
+                      placeholder={
+                        row.pricing_type === "fixed"
+                          ? "Description (optional) — shown on the invoice line, followed by the invoice month"
+                          : "Description (optional) — combined with the auto centre/month text on the invoice"
+                      }
                       value={row.description}
                       onChange={(e) => updateServiceRow(row.key, { description: e.target.value })}
                       className="mt-1.5 w-full rounded-lg bg-white border border-gray-200 px-2 py-1.5 text-xs text-gray-900 focus:outline-none focus:ring-1 focus:ring-indigo-200"

@@ -54,19 +54,38 @@ class CustomerServiceSlabResponse(BaseModel):
 class CustomerServiceInput(BaseModel):
     product_and_service_id: int
     # Which RAW Data-Imaging sheet column this row reads its quantity from.
-    # Required — a row with no column produces no invoice line item.
-    sheet_column_id: int
-    # Optional free text, combined with the auto "{Center} for {Mon YY}" text
-    # in every QBO line-item description this row produces.
+    # Required for flat/slab — a row with no column produces no invoice line
+    # item. Must be omitted for "fixed", which doesn't read the sheet at all.
+    sheet_column_id: int | None = None
+    # Optional free text. flat/slab: combined with the auto "{Center} for {Mon YY}"
+    # text in every QBO line-item description this row produces. fixed: combined
+    # with the invoice month ("{description} for {Mon YY}").
     description: str | None = None
-    pricing_type: Literal["flat", "slab"] = "flat"
-    # Required (and >0) when pricing_type == "flat"; unused for "slab".
-    rate: Decimal | None = Field(None, gt=0, description="Required when pricing_type is 'flat'")
-    # Required (>=1 entry) when pricing_type == "slab"; unused for "flat".
+    pricing_type: Literal["flat", "slab", "fixed"] = "flat"
+    # Required (and >0) when pricing_type is "flat" or "fixed"; unused for "slab".
+    rate: Decimal | None = Field(None, gt=0, description="Required when pricing_type is 'flat' or 'fixed'")
+    # Required (and >0) when pricing_type == "fixed"; must be omitted otherwise.
+    quantity: Decimal | None = Field(None, gt=0, description="Required when pricing_type is 'fixed'")
+    # Required (>=1 entry) when pricing_type == "slab"; unused otherwise.
     slabs: list[CustomerServiceSlabInput] | None = None
 
     @model_validator(mode="after")
     def _check_pricing(self) -> "CustomerServiceInput":
+        if self.pricing_type == "fixed":
+            if self.sheet_column_id is not None:
+                raise ValueError("sheet_column_id must not be set when pricing_type is 'fixed'")
+            if self.quantity is None or self.quantity <= 0:
+                raise ValueError("quantity must be greater than zero for fixed pricing")
+            if self.rate is None or self.rate <= 0:
+                raise ValueError("rate must be greater than zero for fixed pricing")
+            if self.slabs:
+                raise ValueError("slabs must not be set when pricing_type is 'fixed'")
+            return self
+
+        if self.sheet_column_id is None:
+            raise ValueError("sheet_column_id is required for flat and slab pricing")
+        if self.quantity is not None:
+            raise ValueError("quantity must only be set when pricing_type is 'fixed'")
         if self.pricing_type == "flat":
             if self.rate is None or self.rate <= 0:
                 raise ValueError("rate must be greater than zero for flat pricing")
@@ -88,8 +107,9 @@ class CustomerServiceResponse(BaseModel):
     name: str | None = None
     sheet_column_id: int | None = None
     column_header: str | None = None
-    pricing_type: Literal["flat", "slab"]
+    pricing_type: Literal["flat", "slab", "fixed"]
     rate: Decimal | None = None
+    quantity: Decimal | None = None
     description: str | None = None
     slabs: list[CustomerServiceSlabResponse] = Field(default_factory=list)
 
@@ -264,6 +284,7 @@ def customer_response_from_row(row: Customer) -> CustomerResponse:
                     column_header=cs.sheet_column.name if cs.sheet_column else None,
                     pricing_type=cs.pricing_type.value,
                     rate=cs.rate,
+                    quantity=cs.quantity,
                     description=cs.description,
                     slabs=[
                         CustomerServiceSlabResponse.model_validate(slab, from_attributes=True)

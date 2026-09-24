@@ -25,8 +25,12 @@ def _apply_customer_service_links(
     # Validate no duplicate (product_and_service_id, sheet_column_id) pair in
     # the input list — the same product IS allowed twice now, as long as each
     # occurrence reads its quantity from a different sheet column.
+    # Fixed rows have no column, so they're exempt: a customer may carry several
+    # fixed charges for the same product (different quantity/description).
     seen_pairs: set[tuple[int, int]] = set()
     for svc in services:
+        if svc.sheet_column_id is None:
+            continue
         pair = (svc.product_and_service_id, svc.sheet_column_id)
         if pair in seen_pairs:
             raise ValueError(
@@ -50,7 +54,7 @@ def _apply_customer_service_links(
         raise ValueError(f"Unknown product_and_service_ids: {missing_ps}")
 
     # Validate all referenced sheet column IDs exist
-    col_ids = [s.sheet_column_id for s in services]
+    col_ids = [s.sheet_column_id for s in services if s.sheet_column_id is not None]
     existing_col_ids = {
         c.id for c in db.query(SheetColumn).filter(SheetColumn.id.in_(col_ids)).all()
     }
@@ -70,7 +74,8 @@ def _apply_customer_service_links(
             sheet_column_id=svc.sheet_column_id,
             description=(svc.description or "").strip() or None,
             pricing_type=pricing_type,
-            rate=svc.rate if pricing_type == PricingType.flat else None,
+            rate=svc.rate if pricing_type in (PricingType.flat, PricingType.fixed) else None,
+            quantity=svc.quantity if pricing_type == PricingType.fixed else None,
         )
         if pricing_type == PricingType.slab:
             cps.slabs = [

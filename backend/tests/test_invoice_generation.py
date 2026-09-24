@@ -157,6 +157,24 @@ def _link_service(
     return cps
 
 
+def _link_fixed_service(
+    db, customer, ps, quantity: float, rate: float, description: str | None = None,
+) -> CustomerProductAndService:
+    """A fixed-pricing row: reads no sheet column, bills quantity x rate."""
+    cps = CustomerProductAndService(
+        customer_id=customer.id,
+        product_and_service_id=ps.id,
+        pricing_type=PricingType.fixed,
+        quantity=Decimal(str(quantity)),
+        rate=Decimal(str(rate)),
+        description=description,
+    )
+    db.add(cps)
+    db.commit()
+    db.refresh(cps)
+    return cps
+
+
 def _link_slab_service(
     db, customer, ps, tiers: list[tuple[int, int | None, float]],
     column: str | None = None, description: str | None = None,
@@ -871,6 +889,171 @@ def test_no_description_leaves_output_unchanged(db_session):
     assert result.invoices_created == 1
     desc = qbo.invoices[0]["Line"][0]["Description"]
     assert desc == f"X for {month_label}"
+
+
+# ── Fixed pricing ─────────────────────────────────────────────────────────────
+
+def _last_month_label() -> str:
+    return (date.today().replace(day=1) - timedelta(days=1)).strftime("%b %y")
+
+
+def test_fixed_service_adds_line_without_any_sheet_column(db_session):
+    """A fixed row bills its own quantity x rate — nothing to do with the sheet."""
+    sc = _make_service_code(db_session, "B0010")
+    customer = _make_customer(db_session, "Fixed Co", qbo_id="qbo-fixed", email="fx@fx.com")
+    _make_center(db_session, customer.id, "PAR")
+    gardening = _make_product(db_session, "Gardening", "qbo-fixed-g")
+    fee = _make_product(db_session, "E-Referral Portal Monthly Subscription Fees B0003", "qbo-fixed-fee")
+    _link_service(db_session, customer, gardening, sc, 2.0)
+    _link_fixed_service(db_session, customer, fee, quantity=3, rate=150.0, description="Portal subscription")
+
+    qbo = FakeQBO()
+    csv_bytes = _make_raw_csv([("PAR", {"Gardening": 10})], ["Gardening"])
+    result = generate_invoices(db_session, qbo, "tok", "realm", "f.csv", csv_bytes)
+
+    assert result.invoices_created == 1
+    lines = qbo.invoices[0]["Line"]
+    assert len(lines) == 2
+    fixed = next(l for l in lines if l["SalesItemLineDetail"]["ItemRef"]["value"] == "qbo-fixed-fee")
+    assert fixed["SalesItemLineDetail"]["Qty"] == 3.0
+    assert fixed["SalesItemLineDetail"]["UnitPrice"] == 150.0
+    assert fixed["Amount"] == pytest.approx(450.0)
+    assert fixed["Description"] == f"Portal subscription for {_last_month_label()}"
+
+
+def test_fixed_service_description_falls_back_to_product_name(db_session):
+    customer = _make_customer(db_session, "Fixed NoDesc Co", qbo_id="qbo-fxnd", email="fxnd@fx.com")
+    _make_center(db_session, customer.id, "PAR")
+    fee = _make_product(db_session, "Software Development Charges B0005", "qbo-fxnd-fee")
+    _link_fixed_service(db_session, customer, fee, quantity=1, rate=500.0)
+
+    qbo = FakeQBO()
+    csv_bytes = _make_raw_csv([("PAR", {"Unrelated": 1})], ["Unrelated"])
+    result = generate_invoices(db_session, qbo, "tok", "realm", "f.csv", csv_bytes)
+
+    assert result.invoices_created == 1
+    assert qbo.invoices[0]["Line"][0]["Description"] == (
+        f"Software Development Charges B0005 for {_last_month_label()}"
+    )
+
+
+def test_fixed_only_customer_is_still_invoiced(db_session):
+    """No metric line at all — the fixed line alone is enough for an invoice."""
+    customer = _make_customer(db_session, "Fixed Only Co", qbo_id="qbo-fxonly", email="fo@fx.com")
+    _make_center(db_session, customer.id, "PAR")
+    fee = _make_product(db_session, "Consulting services B0006", "qbo-fxonly-fee")
+    _link_fixed_service(db_session, customer, fee, quantity=2, rate=100.0, description="Preread")
+
+    qbo = FakeQBO()
+    csv_bytes = _make_raw_csv([("PAR", {"Unrelated": 1})], ["Unrelated"])
+    result = generate_invoices(db_session, qbo, "tok", "realm", "f.csv", csv_bytes)
+
+    assert result.invoices_created == 1
+    assert len(qbo.invoices[0]["Line"]) == 1
+
+
+def test_fixed_service_billed_once_across_a_customers_invoices(db_session):
+    """A grouped invoice + a standalone one -> two invoices, but the fixed
+    charge is billed once, on the first."""
+    sc = _make_service_code(db_session, "B0011")
+    customer = _make_customer(db_session, "Two Invoice Fixed Co", qbo_id="qbo-fx2", email="fx2@fx.com")
+    ctr_a = _make_center(db_session, customer.id, "PARA")
+    ctr_b = _make_center(db_session, customer.id, "PARB")
+    _make_center(db_session, customer.id, "ARGX")
+    _make_grouping(db_session, customer.id, [ctr_a, ctr_b])
+    gardening = _make_product(db_session, "Gardening", "qbo-fx2-g")
+    fee = _make_product(db_session, "Implementation Charges B0004", "qbo-fx2-fee")
+    _link_service(db_session, customer, gardening, sc, 2.0)
+    _link_fixed_service(db_session, customer, fee, quantity=1, rate=999.0)
+
+    qbo = FakeQBO()
+    csv_bytes = _make_raw_csv(
+        [("PARA", {"Gardening": 5}), ("PARB", {"Gardening": 3}), ("ARGX", {"Gardening": 7})],
+        ["Gardening"],
+    )
+    result = generate_invoices(db_session, qbo, "tok", "realm", "f.csv", csv_bytes)
+
+    assert result.invoices_created == 2
+    has_fixed = [
+        any(l["SalesItemLineDetail"]["ItemRef"]["value"] == "qbo-fx2-fee" for l in inv["Line"])
+        for inv in qbo.invoices
+    ]
+    assert has_fixed == [True, False]
+
+
+def test_fixed_service_lands_on_the_first_invoice_that_is_actually_created(db_session):
+    """If the first invoice fails in QBO, the fixed charge moves to the next one."""
+    sc = _make_service_code(db_session, "B0012")
+    customer = _make_customer(db_session, "Retry Fixed Co", qbo_id="qbo-fxr", email="fxr@fx.com")
+    ctr_a = _make_center(db_session, customer.id, "PARA")
+    ctr_b = _make_center(db_session, customer.id, "PARB")
+    _make_center(db_session, customer.id, "ARGX")
+    _make_grouping(db_session, customer.id, [ctr_a, ctr_b])
+    gardening = _make_product(db_session, "Gardening", "qbo-fxr-g")
+    fee = _make_product(db_session, "Implementation Charges B0004", "qbo-fxr-fee")
+    _link_service(db_session, customer, gardening, sc, 2.0)
+    _link_fixed_service(db_session, customer, fee, quantity=1, rate=999.0)
+
+    class FailFirstQBO(FakeQBO):
+        def __init__(self) -> None:
+            super().__init__()
+            self._calls = 0
+
+        def create_invoice(self, access_token, realm_id, payload):
+            self._calls += 1
+            if self._calls == 1:
+                raise RuntimeError("QBO hiccup")
+            return super().create_invoice(access_token, realm_id, payload)
+
+    qbo = FailFirstQBO()
+    csv_bytes = _make_raw_csv(
+        [("PARA", {"Gardening": 5}), ("PARB", {"Gardening": 3}), ("ARGX", {"Gardening": 7})],
+        ["Gardening"],
+    )
+    result = generate_invoices(db_session, qbo, "tok", "realm", "f.csv", csv_bytes)
+
+    assert result.invoices_failed == 1
+    assert result.invoices_created == 1
+    fixed_lines = [
+        l for inv in qbo.invoices for l in inv["Line"]
+        if l["SalesItemLineDetail"]["ItemRef"]["value"] == "qbo-fxr-fee"
+    ]
+    assert len(fixed_lines) == 1
+
+
+def test_preview_shows_fixed_line_once_per_customer(db_session):
+    from app.schemas.invoice_validation import RevalidateRequest, ValidatedRow
+    from app.services.invoice_generation import build_line_item_preview
+
+    sc = _make_service_code(db_session, "B0013")
+    customer = _make_customer(db_session, "Preview Fixed Co", qbo_id="qbo-pfx", email="pfx@fx.com")
+    ctr_a = _make_center(db_session, customer.id, "PARA")
+    ctr_b = _make_center(db_session, customer.id, "PARB")
+    _make_center(db_session, customer.id, "ARGX")
+    _make_grouping(db_session, customer.id, [ctr_a, ctr_b])
+    gardening = _make_product(db_session, "Gardening", "qbo-pfx-g")
+    fee = _make_product(db_session, "Implementation Charges B0004", "qbo-pfx-fee")
+    _link_service(db_session, customer, gardening, sc, 2.0)
+    _link_fixed_service(db_session, customer, fee, quantity=2, rate=50.0, description="Go-live")
+
+    def _row(i, cid):
+        return ValidatedRow(row_index=i, center_id=cid, center_name="X", center_prefix=cid,
+                            metrics={"Gardening": 5}, matched=True)
+
+    body = RevalidateRequest(
+        metric_columns=["Gardening"],
+        rows=[_row(0, "PARA"), _row(1, "PARB"), _row(2, "ARGX")],
+    )
+    preview = build_line_item_preview(body, db_session)
+
+    assert len(preview["invoices"]) == 2
+    per_invoice = [
+        [l for l in inv["line_items"] if l["description"] == f"Go-live for {_last_month_label()}"]
+        for inv in preview["invoices"]
+    ]
+    assert [len(x) for x in per_invoice] == [1, 0]
+    assert per_invoice[0][0]["quantity"] == 2.0
+    assert per_invoice[0][0]["amount"] == pytest.approx(100.0)
 
 
 # ── Drive attachment ───────────────────────────────────────────────────────────

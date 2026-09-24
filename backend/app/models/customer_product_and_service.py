@@ -13,6 +13,7 @@ from app.models.base import Base
 class PricingType(str, enum.Enum):
     flat = "flat"     # single whole-number rate, taken straight from the sheet column
     slab = "slab"     # quantity distributed across one or more range tiers, each its own rate
+    fixed = "fixed"   # no sheet column: a fixed quantity x rate added to every customer invoice run
 
 
 class CustomerProductAndService(Base):
@@ -42,14 +43,18 @@ class CustomerProductAndService(Base):
         default=PricingType.flat,
         server_default=PricingType.flat.value,
     )
-    # Only meaningful when pricing_type == flat. Slab rows carry their rates on `slabs` instead.
+    # Used when pricing_type is flat or fixed. Slab rows carry their rates on `slabs` instead.
     rate: Mapped[Decimal | None] = mapped_column(Numeric(18, 4), nullable=True)
+    # Only meaningful when pricing_type == fixed: the quantity billed every run,
+    # instead of one read from a sheet column.
+    quantity: Mapped[Decimal | None] = mapped_column(Numeric(18, 4), nullable=True)
 
     # Which RAW Data-Imaging sheet column this row reads its quantity from — see
-    # SheetColumn. Nullable at the DB level only for the transitional backfill
-    # window (scripts/backfill_customer_service_columns.py); the API requires it
-    # on every create/update going forward. A row with no column produces no
-    # invoice line item, same as the old unmapped-product behavior.
+    # SheetColumn. Required by the API for flat/slab rows, and always NULL for
+    # fixed rows (they don't read the sheet). Nullable at the DB level also for
+    # the transitional backfill window (scripts/backfill_customer_service_columns.py).
+    # A flat/slab row with no column produces no invoice line item, same as the
+    # old unmapped-product behavior.
     sheet_column_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("sheet_columns.id", ondelete="RESTRICT"), nullable=True, index=True
     )

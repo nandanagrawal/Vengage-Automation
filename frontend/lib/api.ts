@@ -175,7 +175,8 @@ export type ServiceCodeRow = {
   updated_at: string;
 };
 
-export type PricingType = "flat" | "slab";
+// "fixed" reads no sheet column: a fixed quantity x rate added to each invoice run.
+export type PricingType = "flat" | "slab" | "fixed";
 
 export type CustomerServiceSlabRow = {
   id: number;
@@ -194,6 +195,7 @@ export type CustomerServiceRow = {
   column_header: string | null;
   pricing_type: PricingType;
   rate: string | null;
+  quantity: string | null;   // only set for pricing_type "fixed"
   description: string | null;
   slabs: CustomerServiceSlabRow[];
 };

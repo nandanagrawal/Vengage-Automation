@@ -390,6 +390,83 @@ def test_customer_same_product_different_columns_allowed(admin_client, fake_qbo)
     assert len(r.json()["customer_services"]) == 2
 
 
+def test_customer_fixed_pricing_needs_no_sheet_column(admin_client, fake_qbo):
+    pid = _synced_product_id(admin_client, fake_qbo, "27", "Fixed Fee Widget")
+    r = admin_client.post(
+        "/api/v1/customers",
+        json={**_BASE, "display_name": "Fixed Co", "customer_services": [
+            {
+                "product_and_service_id": pid, "pricing_type": "fixed",
+                "quantity": "3", "rate": "150.00", "description": "Portal subscription",
+            }
+        ]},
+    )
+    assert r.status_code == 200, r.text
+    svc = r.json()["customer_services"][0]
+    assert svc["pricing_type"] == "fixed"
+    assert float(svc["quantity"]) == 3.0
+    assert float(svc["rate"]) == 150.0
+    assert svc["description"] == "Portal subscription"
+    assert svc["sheet_column_id"] is None
+    assert svc["slabs"] == []
+
+
+def test_customer_fixed_pricing_requires_quantity_and_rate(admin_client, fake_qbo):
+    pid = _synced_product_id(admin_client, fake_qbo, "28", "Fixed Missing Widget")
+    for svc in (
+        {"product_and_service_id": pid, "pricing_type": "fixed", "rate": "10.00"},        # no quantity
+        {"product_and_service_id": pid, "pricing_type": "fixed", "quantity": "2"},        # no rate
+        {"product_and_service_id": pid, "pricing_type": "fixed", "quantity": "0", "rate": "10.00"},
+    ):
+        r = admin_client.post(
+            "/api/v1/customers",
+            json={**_BASE, "display_name": "Bad Fixed Co", "customer_services": [svc]},
+        )
+        assert r.status_code == 422, svc
+
+
+def test_customer_fixed_pricing_rejects_a_sheet_column(admin_client, fake_qbo):
+    pid = _synced_product_id(admin_client, fake_qbo, "29", "Fixed Column Widget")
+    col_id = _sheet_column_id(admin_client, "Fixed Should Not Have Col")
+    r = admin_client.post(
+        "/api/v1/customers",
+        json={**_BASE, "display_name": "Fixed With Col Co", "customer_services": [
+            {"product_and_service_id": pid, "pricing_type": "fixed", "quantity": "1",
+             "rate": "10.00", "sheet_column_id": col_id}
+        ]},
+    )
+    assert r.status_code == 422
+
+
+def test_customer_flat_and_slab_still_require_a_sheet_column(admin_client, fake_qbo):
+    pid = _synced_product_id(admin_client, fake_qbo, "30", "Column Required Widget")
+    flat = {"product_and_service_id": pid, "rate": "10.00"}
+    slab = {"product_and_service_id": pid, "pricing_type": "slab",
+            "slabs": [{"range_start": 1, "range_end": None, "rate": "5.00"}]}
+    for svc in (flat, slab):
+        r = admin_client.post(
+            "/api/v1/customers",
+            json={**_BASE, "display_name": "No Column Co", "customer_services": [svc]},
+        )
+        assert r.status_code == 422, svc
+
+
+def test_customer_can_carry_several_fixed_rows_for_one_product(admin_client, fake_qbo):
+    """Fixed rows have no column, so the (product, column) duplicate rule doesn't apply."""
+    pid = _synced_product_id(admin_client, fake_qbo, "31", "Repeat Fixed Widget")
+    r = admin_client.post(
+        "/api/v1/customers",
+        json={**_BASE, "display_name": "Two Fixed Co", "customer_services": [
+            {"product_and_service_id": pid, "pricing_type": "fixed", "quantity": "1",
+             "rate": "10.00", "description": "One"},
+            {"product_and_service_id": pid, "pricing_type": "fixed", "quantity": "2",
+             "rate": "20.00", "description": "Two"},
+        ]},
+    )
+    assert r.status_code == 200, r.text
+    assert len(r.json()["customer_services"]) == 2
+
+
 def test_qbo_customer_payload_excludes_app_service_links():
     from app.models.customer import Customer
     from app.services.qbo_client import customer_model_to_qbo_payload

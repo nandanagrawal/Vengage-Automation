@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from sqlalchemy.orm import Session
 
-from app.models.customer import Customer, CustomerStatus
+from app.models.center import Center
+from app.models.customer import Customer, CustomerCategory, CustomerStatus
 from app.models.customer_product_and_service import (
     CustomerProductAndService,
     CustomerProductAndServiceSlab,
@@ -22,20 +23,36 @@ def _apply_customer_service_links(
     if services is None:
         return
 
-    # Validate no duplicate (product_and_service_id, sheet_column_id) pair in
-    # the input list — the same product IS allowed twice now, as long as each
-    # occurrence reads its quantity from a different sheet column.
-    # Fixed rows have no column, so they're exempt: a customer may carry several
-    # fixed charges for the same product (different quantity/description).
-    seen_pairs: set[tuple[int, int]] = set()
+    # direct customers: every row is customer-wide (no centre). partner
+    # customers: every row must pick one of the customer's own centres.
+    is_partner = row.category == CustomerCategory.partner
     for svc in services:
-        if svc.sheet_column_id is None:
+        if is_partner and svc.center_id is None:
+            raise ValueError(
+                "center_id is required for every service on a Partner customer."
+            )
+        if not is_partner and svc.center_id is not None:
+            raise ValueError(
+                "center_id must not be set for a Direct customer's services."
+            )
+
+    # Validate no duplicate (product_and_service_id, sheet_column_id, center_id)
+    # combination in the input list — the same product IS allowed more than
+    # once now, as long as each occurrence reads a different sheet column
+    # and/or belongs to a different centre.
+    # Fixed/input rows have no column, so they're exempt from the column half
+    # of this: a customer may carry several fixed/input charges for the same
+    # product (different quantity/description), as long as they don't also
+    # collide on centre.
+    seen_pairs: set[tuple[int, int | None, int | None]] = set()
+    for svc in services:
+        if svc.sheet_column_id is None and svc.center_id is None:
             continue
-        pair = (svc.product_and_service_id, svc.sheet_column_id)
+        pair = (svc.product_and_service_id, svc.sheet_column_id, svc.center_id)
         if pair in seen_pairs:
             raise ValueError(
                 f"Duplicate product_and_service_id {svc.product_and_service_id} with the same "
-                "sheet column — map it to a different column instead."
+                "sheet column and centre — change one of them."
             )
         seen_pairs.add(pair)
 
@@ -62,6 +79,19 @@ def _apply_customer_service_links(
     if missing_cols:
         raise ValueError(f"Unknown sheet_column_ids: {missing_cols}")
 
+    # Validate every referenced centre exists AND belongs to this customer —
+    # a Partner customer can't map a service to some other customer's centre.
+    center_ids = [s.center_id for s in services if s.center_id is not None]
+    if center_ids:
+        own_center_ids = {
+            c.id for c in db.query(Center)
+            .filter(Center.id.in_(center_ids), Center.company_id == row.id)
+            .all()
+        }
+        missing_centers = sorted(set(center_ids) - own_center_ids)
+        if missing_centers:
+            raise ValueError(f"Unknown or not-this-customer's center_ids: {missing_centers}")
+
     # Delete existing rows first and flush so the DB releases the unique slots
     # before we insert the replacement rows (avoids UniqueViolation on flush).
     row.customer_services.clear()
@@ -72,9 +102,10 @@ def _apply_customer_service_links(
             customer_id=row.id,
             product_and_service_id=svc.product_and_service_id,
             sheet_column_id=svc.sheet_column_id,
+            center_id=svc.center_id,
             description=(svc.description or "").strip() or None,
             pricing_type=pricing_type,
-            rate=svc.rate if pricing_type in (PricingType.flat, PricingType.fixed) else None,
+            rate=svc.rate if pricing_type != PricingType.slab else None,
             quantity=svc.quantity if pricing_type == PricingType.fixed else None,
         )
         if pricing_type == PricingType.slab:
@@ -162,6 +193,7 @@ def create_customer_row(
         ship_same_as_billing=body.ship_same_as_billing,
         notes=body.notes,
         add_attachment_in_mail=body.add_attachment_in_mail,
+        category=CustomerCategory(body.category),
         payment_terms_days=body.payment_terms_days,
     )
     _apply_address_to_billing(row, body.billing)
@@ -230,6 +262,8 @@ def update_customer_row(db: Session, row: Customer, body: CustomerUpdate) -> Cus
         row.notes = body.notes
     if body.add_attachment_in_mail is not None:
         row.add_attachment_in_mail = body.add_attachment_in_mail
+    if body.category is not None:
+        row.category = CustomerCategory(body.category)
     if body.payment_terms_days is not None:
         row.payment_terms_days = body.payment_terms_days
 

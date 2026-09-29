@@ -16,6 +16,15 @@ class CustomerStatus(str, enum.Enum):
     rejected = "rejected"    # rejected by admin
 
 
+class CustomerCategory(str, enum.Enum):
+    """How this customer's products/services are billed — not the same as the
+    free-form CustomerType tag list. direct = one shared set of services
+    across every centre (today's behavior). partner = every service row is
+    scoped to one specific centre instead."""
+    direct = "direct"
+    partner = "partner"
+
+
 class Customer(Base):
     __tablename__ = "customers"
 
@@ -79,6 +88,15 @@ class Customer(Base):
 
     # App-specific extensions
     add_attachment_in_mail: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+    # direct = customer-wide services (today's behavior); partner = every
+    # service row picks its own centre instead. See CustomerCategory.
+    category: Mapped[CustomerCategory] = mapped_column(
+        Enum(CustomerCategory, name="customercategory", native_enum=False),
+        nullable=False,
+        default=CustomerCategory.direct,
+        server_default=CustomerCategory.direct.value,
+    )
 
     # Invoice due date = TxnDate + payment_terms_days, per customer (QBO DueDate field).
     payment_terms_days: Mapped[int] = mapped_column(Integer, nullable=False, default=15, server_default="15")

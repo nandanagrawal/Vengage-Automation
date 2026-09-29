@@ -4,7 +4,7 @@ from typing import Literal
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, EmailStr, Field, TypeAdapter, field_validator, model_validator
 
-from app.models.customer import Customer, CustomerStatus
+from app.models.customer import Customer, CustomerCategory, CustomerStatus
 
 
 _email_adapter: TypeAdapter[EmailStr] = TypeAdapter(EmailStr)
@@ -55,31 +55,40 @@ class CustomerServiceInput(BaseModel):
     product_and_service_id: int
     # Which RAW Data-Imaging sheet column this row reads its quantity from.
     # Required for flat/slab — a row with no column produces no invoice line
-    # item. Must be omitted for "fixed", which doesn't read the sheet at all.
+    # item. Must be omitted for "fixed"/"input", neither of which reads the sheet.
     sheet_column_id: int | None = None
+    # Which centre this row is scoped to — required when the customer's
+    # category is "partner" (every service picks its own centre), forbidden
+    # when it's "direct" (services are customer-wide, as before). Checked in
+    # _apply_customer_service_links, which has the customer's category in scope.
+    center_id: int | None = None
     # Optional free text. flat/slab: combined with the auto "{Center} for {Mon YY}"
-    # text in every QBO line-item description this row produces. fixed: combined
-    # with the invoice month ("{description} for {Mon YY}").
+    # text in every QBO line-item description this row produces. fixed/input:
+    # combined with the invoice month ("{description} for {Mon YY}").
     description: str | None = None
-    pricing_type: Literal["flat", "slab", "fixed"] = "flat"
-    # Required (and >0) when pricing_type is "flat" or "fixed"; unused for "slab".
-    rate: Decimal | None = Field(None, gt=0, description="Required when pricing_type is 'flat' or 'fixed'")
-    # Required (and >0) when pricing_type == "fixed"; must be omitted otherwise.
+    pricing_type: Literal["flat", "slab", "fixed", "input"] = "flat"
+    # Required (and >0) when pricing_type is "flat", "fixed", or "input"; unused for "slab".
+    rate: Decimal | None = Field(None, gt=0, description="Required when pricing_type is 'flat', 'fixed', or 'input'")
+    # Required (and >0) when pricing_type == "fixed"; must be omitted otherwise
+    # — "input" never stores a quantity, it's typed in fresh every run instead.
     quantity: Decimal | None = Field(None, gt=0, description="Required when pricing_type is 'fixed'")
     # Required (>=1 entry) when pricing_type == "slab"; unused otherwise.
     slabs: list[CustomerServiceSlabInput] | None = None
 
     @model_validator(mode="after")
     def _check_pricing(self) -> "CustomerServiceInput":
-        if self.pricing_type == "fixed":
+        if self.pricing_type in ("fixed", "input"):
             if self.sheet_column_id is not None:
-                raise ValueError("sheet_column_id must not be set when pricing_type is 'fixed'")
-            if self.quantity is None or self.quantity <= 0:
-                raise ValueError("quantity must be greater than zero for fixed pricing")
+                raise ValueError(f"sheet_column_id must not be set when pricing_type is '{self.pricing_type}'")
             if self.rate is None or self.rate <= 0:
-                raise ValueError("rate must be greater than zero for fixed pricing")
+                raise ValueError(f"rate must be greater than zero for {self.pricing_type} pricing")
             if self.slabs:
-                raise ValueError("slabs must not be set when pricing_type is 'fixed'")
+                raise ValueError(f"slabs must not be set when pricing_type is '{self.pricing_type}'")
+            if self.pricing_type == "fixed":
+                if self.quantity is None or self.quantity <= 0:
+                    raise ValueError("quantity must be greater than zero for fixed pricing")
+            elif self.quantity is not None:
+                raise ValueError("quantity must not be set for input pricing — it's entered at Validate time instead")
             return self
 
         if self.sheet_column_id is None:
@@ -107,7 +116,9 @@ class CustomerServiceResponse(BaseModel):
     name: str | None = None
     sheet_column_id: int | None = None
     column_header: str | None = None
-    pricing_type: Literal["flat", "slab", "fixed"]
+    center_id: int | None = None
+    center_name: str | None = None
+    pricing_type: Literal["flat", "slab", "fixed", "input"]
     rate: Decimal | None = None
     quantity: Decimal | None = None
     description: str | None = None
@@ -155,6 +166,9 @@ class CustomerCreate(BaseModel):
 
     notes: str | None = None
     add_attachment_in_mail: bool = False
+    # direct = customer-wide services (default); partner = every service row
+    # picks its own centre instead. See CustomerServiceInput.center_id.
+    category: Literal["direct", "partner"] = "direct"
     payment_terms_days: int = Field(15, gt=0, description="Invoice due date = TxnDate + this many days")
     customer_services: list[CustomerServiceInput] | None = None
     customer_type_ids: list[int] | None = None
@@ -192,6 +206,7 @@ class CustomerUpdate(BaseModel):
 
     notes: str | None = None
     add_attachment_in_mail: bool | None = None
+    category: Literal["direct", "partner"] | None = None
     payment_terms_days: int | None = Field(None, gt=0, description="Invoice due date = TxnDate + this many days")
     customer_services: list[CustomerServiceInput] | None = None
     customer_type_ids: list[int] | None = None
@@ -246,6 +261,7 @@ class CustomerResponse(BaseModel):
 
     notes: str | None = None
     add_attachment_in_mail: bool = False
+    category: CustomerCategory = CustomerCategory.direct
     payment_terms_days: int = 15
     customer_services: list[CustomerServiceResponse] = Field(default_factory=list)
     customer_type_ids: list[int] = Field(default_factory=list)
@@ -282,6 +298,8 @@ def customer_response_from_row(row: Customer) -> CustomerResponse:
                     name=cs.product_and_service.name if cs.product_and_service else None,
                     sheet_column_id=cs.sheet_column_id,
                     column_header=cs.sheet_column.name if cs.sheet_column else None,
+                    center_id=cs.center_id,
+                    center_name=cs.center.name if cs.center else None,
                     pricing_type=cs.pricing_type.value,
                     rate=cs.rate,
                     quantity=cs.quantity,

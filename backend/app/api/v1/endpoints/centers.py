@@ -38,7 +38,10 @@ def create_center(
     exists = db.query(Center).filter(Center.name == name).first()
     if exists:
         raise HTTPException(status_code=409, detail=f"A center named '{name}' already exists.")
-    row = Center(company_id=customer_id, name=name)
+    row = Center(
+        company_id=customer_id, name=name,
+        drive_file_names=(body.drive_file_names or "").strip() or None,
+    )
     db.add(row)
     db.commit()
     db.refresh(row)
@@ -66,6 +69,7 @@ def update_center(
     if conflict:
         raise HTTPException(status_code=409, detail=f"A center named '{name}' already exists.")
     row.name = name
+    row.drive_file_names = (body.drive_file_names or "").strip() or None
     db.add(row)
     db.commit()
     db.refresh(row)

@@ -102,6 +102,9 @@ export function qboConnectUrl(): string {
 // ── Types ──────────────────────────────────────────────────────────────────
 
 export type CustomerStatus = "pending" | "approved" | "rejected";
+// direct = one shared set of services across every centre (default).
+// partner = every service row picks its own centre instead.
+export type CustomerCategory = "direct" | "partner";
 
 export type CustomerRow = {
   id: number;
@@ -148,6 +151,7 @@ export type CustomerRow = {
 
   notes: string | null;
   add_attachment_in_mail: boolean;
+  category: CustomerCategory;
   payment_terms_days: number;
 
   created_at: string;
@@ -176,7 +180,9 @@ export type ServiceCodeRow = {
 };
 
 // "fixed" reads no sheet column: a fixed quantity x rate added to each invoice run.
-export type PricingType = "flat" | "slab" | "fixed";
+// "input" also reads no sheet column and stores no quantity — it's typed in
+// fresh, once per generation run, right after the sheet is validated.
+export type PricingType = "flat" | "slab" | "fixed" | "input";
 
 export type CustomerServiceSlabRow = {
   id: number;
@@ -193,6 +199,9 @@ export type CustomerServiceRow = {
   // set per customer-service row now, not globally per product.
   sheet_column_id: number | null;
   column_header: string | null;
+  // Set only for Partner customers — which centre this row is scoped to.
+  center_id: number | null;
+  center_name: string | null;
   pricing_type: PricingType;
   rate: string | null;
   quantity: string | null;   // only set for pricing_type "fixed"
@@ -224,6 +233,9 @@ export type CenterRow = {
   id: number;
   company_id: number;
   name: string;
+  // Comma-separated exact Google Drive file name(s) for this centre,
+  // extension included, e.g. "VNG-IMG-14-A.xlsx, VNG-IMG-14-A-B.xls".
+  drive_file_names: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -383,11 +395,31 @@ export type CustomerError = {
   errors: string[];
 };
 
+// One "Input"-priced service row still needing a quantity typed in for this
+// run. Not a blocking error by itself — shown as a number box between
+// Validate and Preview; the list is unsatisfied-only, so it empties out as
+// quantities are supplied.
+export type InputRequirement = {
+  customer_product_and_service_id: number;
+  customer_id: number;
+  customer_display_name: string;
+  product_name: string;
+  description: string | null;
+  center_id: number | null;
+  center_name: string | null;
+};
+
+export type InputQuantityEntry = {
+  customer_product_and_service_id: number;
+  quantity: number;
+};
+
 export type ValidationResponse = {
   metric_columns: string[];
   rows: ValidatedRow[];
   customer_errors: CustomerError[];
   has_errors: boolean;
+  input_requirements: InputRequirement[];
 };
 
 export type PreviewCenter = {
@@ -422,13 +454,19 @@ export type GenerateRequest = {
   rows: ValidatedRow[];
   // Google Drive folder link holding per-centre raw-data files (e.g.
   // "VNG-IMG-60.xlsx") — each matched centre's file gets attached to its
-  // QBO invoice.
+  // QBO invoice. Already checked as a blocking Validate-stage error; carried
+  // again here since this is the actual download/attach step.
   drive_folder_url?: string;
+  input_quantities?: InputQuantityEntry[];
 };
 
-export async function apiValidateInvoiceFile(file: File): Promise<ValidationResponse> {
+export async function apiValidateInvoiceFile(
+  file: File,
+  driveFolderUrl?: string,
+): Promise<ValidationResponse> {
   const form = new FormData();
   form.append("file", file);
+  if (driveFolderUrl) form.append("drive_folder_url", driveFolderUrl);
   const r = await fetch(`${API_V1_BASE}/invoice-uploads/validate`, {
     method: "POST",
     headers: authHeaders(),
@@ -441,33 +479,33 @@ export async function apiValidateInvoiceFile(file: File): Promise<ValidationResp
 export async function apiRevalidate(
   metric_columns: string[],
   rows: ValidatedRow[],
+  driveFolderUrl?: string,
+  inputQuantities?: InputQuantityEntry[],
 ): Promise<ValidationResponse> {
-  return apiPost<ValidationResponse>("/invoice-uploads/revalidate", { metric_columns, rows });
+  return apiPost<ValidationResponse>("/invoice-uploads/revalidate", {
+    metric_columns, rows,
+    drive_folder_url: driveFolderUrl,
+    input_quantities: inputQuantities ?? [],
+  });
 }
 
 export async function apiPreview(
   metric_columns: string[],
   rows: ValidatedRow[],
+  driveFolderUrl?: string,
+  inputQuantities?: InputQuantityEntry[],
 ): Promise<PreviewResponse> {
-  return apiPost<PreviewResponse>("/invoice-uploads/preview", { metric_columns, rows });
+  return apiPost<PreviewResponse>("/invoice-uploads/preview", {
+    metric_columns, rows,
+    drive_folder_url: driveFolderUrl,
+    input_quantities: inputQuantities ?? [],
+  });
 }
 
 export type GenerateJobResponse = { upload_id: number; status: string };
 
 export async function apiGenerateInvoices(req: GenerateRequest): Promise<GenerateJobResponse> {
   return apiPost<GenerateJobResponse>("/invoice-uploads/generate", req);
-}
-
-export type DriveAttachmentCheckResponse = { warnings: string[] };
-
-export async function apiCheckDriveAttachments(
-  metric_columns: string[],
-  rows: ValidatedRow[],
-  drive_folder_url: string,
-): Promise<DriveAttachmentCheckResponse> {
-  return apiPost<DriveAttachmentCheckResponse>("/invoice-uploads/check-drive-attachments", {
-    metric_columns, rows, drive_folder_url,
-  });
 }
 
 export type SheetConfigResponse = {
@@ -506,8 +544,11 @@ export type LineItemPreviewResponse = {
 export async function apiGetLineItemPreview(
   metric_columns: string[],
   rows: ValidatedRow[],
+  inputQuantities?: InputQuantityEntry[],
 ): Promise<LineItemPreviewResponse> {
-  return apiPost<LineItemPreviewResponse>("/invoice-uploads/line-item-preview", { metric_columns, rows });
+  return apiPost<LineItemPreviewResponse>("/invoice-uploads/line-item-preview", {
+    metric_columns, rows, input_quantities: inputQuantities ?? [],
+  });
 }
 
 export type AuthToken = { access_token: string; token_type: string };

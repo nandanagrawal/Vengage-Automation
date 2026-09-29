@@ -14,18 +14,21 @@ class PricingType(str, enum.Enum):
     flat = "flat"     # single whole-number rate, taken straight from the sheet column
     slab = "slab"     # quantity distributed across one or more range tiers, each its own rate
     fixed = "fixed"   # no sheet column: a fixed quantity x rate added to every customer invoice run
+    input = "input"   # no sheet column, no stored quantity: entered by hand at Validate time, every run
 
 
 class CustomerProductAndService(Base):
     __tablename__ = "customer_product_and_services"
     __table_args__ = (
         # The same product can now be mapped twice for one customer as long as it
-        # reads its quantity from a different sheet column — only the exact same
-        # (product, column) pair is rejected. Column mapping used to live globally
-        # on ProductColumnMapping (one column -> one product, for everyone); it now
-        # lives per customer-service row instead, see `sheet_column_id` below.
+        # reads its quantity from a different sheet column, or (Partner customers)
+        # belongs to a different centre — only the exact same
+        # (product, column, centre) combination is rejected. Column mapping used
+        # to live globally on ProductColumnMapping (one column -> one product, for
+        # everyone); it now lives per customer-service row instead, see
+        # `sheet_column_id` below.
         UniqueConstraint(
-            "customer_id", "product_and_service_id", "sheet_column_id",
+            "customer_id", "product_and_service_id", "sheet_column_id", "center_id",
             name="uq_customer_product_column",
         ),
     )
@@ -37,22 +40,29 @@ class CustomerProductAndService(Base):
     product_and_service_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("product_and_services.id", ondelete="CASCADE"), nullable=False, index=True
     )
+    # NULL = customer-wide row (Direct customers, always). Set = this row only
+    # applies to that one centre (Partner customers, always) — see
+    # Customer.category. Deleting the centre deletes rows scoped to it.
+    center_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("centers.id", ondelete="CASCADE"), nullable=True, index=True
+    )
     pricing_type: Mapped[PricingType] = mapped_column(
         Enum(PricingType, name="pricingtype", native_enum=False),
         nullable=False,
         default=PricingType.flat,
         server_default=PricingType.flat.value,
     )
-    # Used when pricing_type is flat or fixed. Slab rows carry their rates on `slabs` instead.
+    # Used when pricing_type is flat, fixed, or input. Slab rows carry their rates on `slabs` instead.
     rate: Mapped[Decimal | None] = mapped_column(Numeric(18, 4), nullable=True)
     # Only meaningful when pricing_type == fixed: the quantity billed every run,
-    # instead of one read from a sheet column.
+    # instead of one read from a sheet column. "input" rows leave this NULL —
+    # their quantity is typed in fresh at Validate time every run instead.
     quantity: Mapped[Decimal | None] = mapped_column(Numeric(18, 4), nullable=True)
 
     # Which RAW Data-Imaging sheet column this row reads its quantity from — see
     # SheetColumn. Required by the API for flat/slab rows, and always NULL for
-    # fixed rows (they don't read the sheet). Nullable at the DB level also for
-    # the transitional backfill window (scripts/backfill_customer_service_columns.py).
+    # fixed/input rows (they don't read the sheet). Nullable at the DB level also
+    # for the transitional backfill window (scripts/backfill_customer_service_columns.py).
     # A flat/slab row with no column produces no invoice line item, same as the
     # old unmapped-product behavior.
     sheet_column_id: Mapped[int | None] = mapped_column(
@@ -75,6 +85,7 @@ class CustomerProductAndService(Base):
         "ProductAndService", back_populates="customer_services"
     )
     sheet_column: Mapped["SheetColumn | None"] = relationship("SheetColumn")
+    center: Mapped["Center | None"] = relationship("Center")
     slabs: Mapped[list["CustomerProductAndServiceSlab"]] = relationship(
         "CustomerProductAndServiceSlab",
         back_populates="customer_product_and_service",

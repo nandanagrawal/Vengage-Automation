@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import * as XLSX from "xlsx";
 import {
-  apiCheckDriveAttachments,
   apiDelete,
   apiGenerateInvoices,
   apiGet,
@@ -14,6 +13,7 @@ import {
   apiValidateInvoiceFile,
   type CustomerError,
   type GenerateRequest,
+  type InputQuantityEntry,
   type InvoiceUploadResult,
   type PreviewCustomer,
   type PreviewResponse,
@@ -78,7 +78,15 @@ function StepBar({ active }: { active: 0 | 1 | 2 | 3 }) {
 
 // ── Stage: Upload ─────────────────────────────────────────────────────────────
 
-function UploadStage({ onValidated }: { onValidated: (v: ValidationResponse, file: File) => void }) {
+function UploadStage({
+  driveUrl,
+  setDriveUrl,
+  onValidated,
+}: {
+  driveUrl: string;
+  setDriveUrl: (v: string) => void;
+  onValidated: (v: ValidationResponse, file: File) => void;
+}) {
   const [file, setFile] = useState<File | null>(null);
   const [dragging, setDragging] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -93,7 +101,7 @@ function UploadStage({ onValidated }: { onValidated: (v: ValidationResponse, fil
     if (!file) return;
     setLoading(true); setError(null);
     try {
-      const res = await apiValidateInvoiceFile(file);
+      const res = await apiValidateInvoiceFile(file, driveUrl.trim() || undefined);
       onValidated(res, file);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Validation failed");
@@ -130,6 +138,22 @@ function UploadStage({ onValidated }: { onValidated: (v: ValidationResponse, fil
           </div>
         )}
       </div>
+      <div>
+        <label className="block text-[11px] font-semibold uppercase tracking-wide text-gray-400 mb-1">
+          Google Drive folder link
+        </label>
+        <input
+          type="text"
+          value={driveUrl}
+          onChange={(e) => setDriveUrl(e.target.value)}
+          placeholder="Google Drive folder link with each centre's raw-data file…"
+          className="w-full rounded-lg bg-gray-50 border border-gray-200 px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-200"
+        />
+        <p className="text-[11px] text-gray-400 mt-1">
+          Required if any matched customer has Mail attachment on — checked as part of validation below, not just at
+          the end. Each centre&apos;s configured Drive file name(s) get attached to its invoice in QuickBooks.
+        </p>
+      </div>
       {error && <p className="text-red-600 text-sm rounded-lg border border-rose-500/30 bg-red-50 px-4 py-2.5">{error}</p>}
       <button type="submit" disabled={!file || loading} className="shimmer-btn px-5 py-2.5 rounded-xl text-gray-900 text-sm font-semibold disabled:opacity-50 flex items-center gap-2">
         {loading && <svg className="w-4 h-4 animate-spin" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9" /></svg>}
@@ -143,10 +167,12 @@ function UploadStage({ onValidated }: { onValidated: (v: ValidationResponse, fil
 
 function ErrorsStage({
   validation,
+  driveUrl,
   onFixed,
   onBack,
 }: {
   validation: ValidationResponse;
+  driveUrl: string;
   onFixed: (v: ValidationResponse) => void;
   onBack: () => void;
 }) {
@@ -164,7 +190,7 @@ function ErrorsStage({
   const onRevalidate = async () => {
     setLoading(true); setError(null);
     try {
-      const res = await apiRevalidate(validation.metric_columns, rows);
+      const res = await apiRevalidate(validation.metric_columns, rows, driveUrl.trim() || undefined, []);
       if (!res.has_errors) {
         onFixed(res);
       } else {
@@ -266,16 +292,111 @@ function ErrorsStage({
   );
 }
 
+// ── Stage: Input required (Input-priced services, typed in fresh every run) ──
+
+function InputRequiredStage({
+  validation,
+  driveUrl,
+  onContinue,
+  onBack,
+}: {
+  validation: ValidationResponse;
+  driveUrl: string;
+  onContinue: (v: ValidationResponse, inputQuantities: InputQuantityEntry[]) => void;
+  onBack: () => void;
+}) {
+  const [values, setValues] = useState<Record<number, string>>({});
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const setValue = (id: number, v: string) => setValues((prev) => ({ ...prev, [id]: v }));
+
+  const allFilled = validation.input_requirements.every(
+    (r) => parseFloat(values[r.customer_product_and_service_id] ?? "") > 0,
+  );
+
+  const onSubmit = async () => {
+    setLoading(true); setError(null);
+    const entries: InputQuantityEntry[] = validation.input_requirements
+      .map((r) => ({
+        customer_product_and_service_id: r.customer_product_and_service_id,
+        quantity: parseFloat(values[r.customer_product_and_service_id] ?? ""),
+      }))
+      .filter((e) => Number.isFinite(e.quantity) && e.quantity > 0);
+    try {
+      const res = await apiRevalidate(validation.metric_columns, validation.rows, driveUrl.trim() || undefined, entries);
+      onContinue(res, entries);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to continue");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="space-y-5">
+      <div>
+        <h2 className="text-sm font-semibold text-gray-900">Enter quantities</h2>
+        <p className="text-[11px] text-gray-400 mt-0.5">
+          These services are billed by a quantity typed in for this run — not read from the sheet, and not saved
+          for next time.
+        </p>
+      </div>
+
+      {error && <p className="text-red-600 text-sm rounded-lg border border-rose-500/30 bg-red-50 px-4 py-2.5">{error}</p>}
+
+      <div className="rounded-2xl border border-gray-200 divide-y divide-gray-100 overflow-hidden" style={{ background: "var(--bg-card)" }}>
+        {validation.input_requirements.map((r) => (
+          <div key={r.customer_product_and_service_id} className="flex items-center justify-between gap-4 px-4 py-3">
+            <div className="min-w-0">
+              <p className="text-sm text-gray-900 font-medium truncate">{r.customer_display_name}</p>
+              <p className="text-xs text-gray-400 truncate">
+                {r.description ?? r.product_name}
+                {r.center_name ? ` · ${r.center_name}` : ""}
+              </p>
+            </div>
+            <input
+              type="number"
+              min="0.01"
+              step="any"
+              placeholder="Quantity"
+              value={values[r.customer_product_and_service_id] ?? ""}
+              onChange={(e) => setValue(r.customer_product_and_service_id, e.target.value)}
+              className="w-32 rounded-lg bg-gray-50 border border-gray-200 px-3 py-1.5 text-sm text-gray-900 text-right focus:outline-none focus:ring-2 focus:ring-indigo-200"
+            />
+          </div>
+        ))}
+      </div>
+
+      <div className="flex justify-end gap-2">
+        <button type="button" onClick={onBack} className="px-4 py-2 rounded-xl text-gray-500 hover:text-gray-900 text-sm border border-gray-200 transition-colors">Back</button>
+        <button
+          type="button"
+          onClick={() => void onSubmit()}
+          disabled={loading || !allFilled}
+          className="shimmer-btn px-5 py-2.5 rounded-xl text-gray-900 text-sm font-semibold disabled:opacity-50"
+        >
+          {loading ? "Checking…" : "Continue"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ── Stage: Preview (customer-grouped, editable) ───────────────────────────────
 
 function PreviewStage({
   preview,
   validatedRows,
+  driveUrl,
+  inputQuantities,
   onSubmit,
   onBack,
 }: {
   preview: PreviewResponse;
   validatedRows: ValidatedRow[];
+  driveUrl: string;
+  inputQuantities: InputQuantityEntry[];
   onSubmit: (req: GenerateRequest) => void;
   onBack: () => void;
 }) {
@@ -283,9 +404,6 @@ function PreviewStage({
   const [rows, setRows] = useState<ValidatedRow[]>(() => validatedRows.map(r => ({ ...r, metrics: { ...r.metrics } })));
   const [isDirty, setIsDirty] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
-  const [driveUrl, setDriveUrl] = useState("");
-  const [checkingAttachments, setCheckingAttachments] = useState(false);
-  const [missingAttachmentWarnings, setMissingAttachmentWarnings] = useState<string[] | null>(null);
 
   const cols = preview.metric_columns;
 
@@ -309,40 +427,17 @@ function PreviewStage({
     metric_columns: cols,
     rows,
     drive_folder_url: driveUrl.trim() || undefined,
+    input_quantities: inputQuantities,
   });
 
-  // Runs after any "isDirty" confirmation: if a Drive folder is set, check for
-  // customers that require an attachment but have no matching file there —
-  // warn and let the user decide before invoices actually get created.
-  const proceedPastAttachmentCheck = async () => {
-    const url = driveUrl.trim();
-    if (!url) { onSubmit(buildRequest()); return; }
-    setCheckingAttachments(true);
-    try {
-      const res = await apiCheckDriveAttachments(cols, rows, url);
-      if (res.warnings.length > 0) {
-        setMissingAttachmentWarnings(res.warnings);
-        return;
-      }
-    } catch {
-      // Check itself failed (e.g. bad link) — don't block submission on it;
-      // the same problem will surface as a warning after generation anyway.
-    } finally {
-      setCheckingAttachments(false);
-    }
-    onSubmit(buildRequest());
-  };
-
+  // The Drive-attachment check already happened as a blocking Validate-stage
+  // error, so there's nothing async to check here anymore — dirty edits just
+  // need a confirmation, then submit straight away.
   const handleSubmitClick = () => {
-    if (isDirty) { setShowConfirm(true); } else { void proceedPastAttachmentCheck(); }
+    if (isDirty) { setShowConfirm(true); } else { onSubmit(buildRequest()); }
   };
 
-  const confirmSubmit = () => { setShowConfirm(false); void proceedPastAttachmentCheck(); };
-
-  const proceedDespiteMissingAttachments = () => {
-    setMissingAttachmentWarnings(null);
-    onSubmit(buildRequest());
-  };
+  const confirmSubmit = () => { setShowConfirm(false); onSubmit(buildRequest()); };
 
   // row lookup by center_id lower
   const rowByCenterId = Object.fromEntries(rows.map(r => [r.center_id.toLowerCase(), r]));
@@ -367,7 +462,7 @@ function PreviewStage({
     // ── Fetch line-item dry-run data ─────────────────────────────────────────
     let liPreview: Awaited<ReturnType<typeof apiGetLineItemPreview>> | null = null;
     try {
-      liPreview = await apiGetLineItemPreview(cols, rows);
+      liPreview = await apiGetLineItemPreview(cols, rows, inputQuantities);
     } catch { /* non-fatal */ }
 
     // ── Date values (from backend dry-run, or calculated client-side) ─────────
@@ -478,27 +573,6 @@ function PreviewStage({
         </div>
       )}
 
-      {/* Missing-attachment warning modal */}
-      {missingAttachmentWarnings && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm">
-          <div className="w-full max-w-lg rounded-2xl border border-gray-200 p-6 space-y-4 shadow-2xl" style={{ background: "var(--surface-2)" }}>
-            <h3 className="text-base font-bold text-gray-900">Missing attachments</h3>
-            <p className="text-sm text-gray-500">
-              These customers have &quot;Add attachment in mail&quot; enabled, but no matching file was found in the Drive folder for one or more of their centres. Their invoices will still be created — just without that attachment.
-            </p>
-            <ul className="space-y-1 max-h-56 overflow-y-auto">
-              {missingAttachmentWarnings.map((w, i) => (
-                <li key={i} className="text-xs text-amber-700/90 rounded-lg bg-amber-500/5 border border-amber-200 px-3 py-2">{w}</li>
-              ))}
-            </ul>
-            <div className="flex gap-3 justify-end">
-              <button type="button" onClick={() => setMissingAttachmentWarnings(null)} className="px-4 py-2 rounded-xl text-gray-500 hover:text-gray-900 border border-gray-200 text-sm transition-colors">Go back</button>
-              <button type="button" onClick={proceedDespiteMissingAttachments} className="shimmer-btn px-4 py-2 rounded-xl text-gray-900 text-sm font-semibold">Generate anyway</button>
-            </div>
-          </div>
-        </div>
-      )}
-
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-sm font-semibold text-gray-900">Preview</h2>
@@ -513,28 +587,11 @@ function PreviewStage({
           <button
             type="button"
             onClick={handleSubmitClick}
-            disabled={checkingAttachments}
-            className="shimmer-btn px-5 py-2.5 rounded-xl text-gray-900 text-sm font-semibold disabled:opacity-60 disabled:cursor-not-allowed"
+            className="shimmer-btn px-5 py-2.5 rounded-xl text-gray-900 text-sm font-semibold"
           >
-            {checkingAttachments ? "Checking attachments…" : isDirty ? "Submit with changes" : "Submit invoices"}
+            {isDirty ? "Submit with changes" : "Submit invoices"}
           </button>
         </div>
-      </div>
-
-      <div>
-        <label className="block text-[11px] font-semibold uppercase tracking-wide text-gray-400 mb-1">
-          Raw data folder link (optional)
-        </label>
-        <input
-          type="text"
-          value={driveUrl}
-          onChange={(e) => setDriveUrl(e.target.value)}
-          placeholder="Google Drive folder link with each centre's raw-data file…"
-          className="w-full rounded-lg bg-gray-50 border border-gray-200 px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-200"
-        />
-        <p className="text-[11px] text-gray-400 mt-1">
-          When set, each matched centre's file (by file name, e.g. &quot;VNG-IMG-60.xlsx&quot;) is attached to its invoice in QuickBooks.
-        </p>
       </div>
 
       {preview.warnings.length > 0 && (
@@ -825,8 +882,9 @@ function HistoryDetailModal({ uploadId, onClose }: { uploadId: number; onClose: 
 type Stage =
   | { type: "upload" }
   | { type: "errors"; validation: ValidationResponse }
+  | { type: "input-required"; validation: ValidationResponse }
   | { type: "previewing"; validation: ValidationResponse }
-  | { type: "preview"; preview: PreviewResponse; validatedRows: ValidatedRow[] }
+  | { type: "preview"; preview: PreviewResponse; validatedRows: ValidatedRow[]; inputQuantities: InputQuantityEntry[] }
   | { type: "submitting" }
   | { type: "processing"; uploadId: number }
   | { type: "done"; result: InvoiceUploadResult };
@@ -834,6 +892,10 @@ type Stage =
 export default function ImportPage() {
   const [activeTab, setActiveTab] = useState<"generate" | "history">("generate");
   const [stage, setStage] = useState<Stage>({ type: "upload" });
+  // Owned here (not by UploadStage) so it survives a round trip through
+  // Errors/Input-required and back — those stages need it for their own
+  // revalidate calls, and Preview/Generate need it again at the end.
+  const [driveUrl, setDriveUrl] = useState("");
 
   const [history, setHistory] = useState<UploadHistoryRow[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -852,30 +914,28 @@ export default function ImportPage() {
   // Step bar index
   const stepIndex: 0 | 1 | 2 | 3 =
     stage.type === "upload" ? 0 :
-    stage.type === "errors" || stage.type === "previewing" ? 1 :
+    stage.type === "errors" || stage.type === "input-required" || stage.type === "previewing" ? 1 :
     stage.type === "preview" ? 2 : 3;
 
-  const handleValidated = async (v: ValidationResponse) => {
+  // Shared by the initial Validate, "Fix errors" re-validate, and "Enter
+  // quantities" continue — all three land here to decide the next stage.
+  const routeAfterValidation = async (v: ValidationResponse, inputQuantities: InputQuantityEntry[] = []) => {
     if (v.has_errors) {
       setStage({ type: "errors", validation: v });
-    } else {
-      await advanceToPreview(v);
+      return;
     }
+    if (v.input_requirements.length > 0) {
+      setStage({ type: "input-required", validation: v });
+      return;
+    }
+    await advanceToPreview(v, inputQuantities);
   };
 
-  const handleFixed = async (v: ValidationResponse) => {
-    if (v.has_errors) {
-      setStage({ type: "errors", validation: v });
-    } else {
-      await advanceToPreview(v);
-    }
-  };
-
-  const advanceToPreview = async (v: ValidationResponse) => {
+  const advanceToPreview = async (v: ValidationResponse, inputQuantities: InputQuantityEntry[]) => {
     setStage({ type: "previewing", validation: v });
     try {
-      const preview = await apiPreview(v.metric_columns, v.rows);
-      setStage({ type: "preview", preview, validatedRows: v.rows });
+      const preview = await apiPreview(v.metric_columns, v.rows, driveUrl.trim() || undefined, inputQuantities);
+      setStage({ type: "preview", preview, validatedRows: v.rows, inputQuantities });
     } catch (err) {
       setStage({ type: "errors", validation: { ...v, has_errors: true, customer_errors: [{ customer_display_name: "", errors: [err instanceof Error ? err.message : "Failed to load preview"] }] } });
     }
@@ -957,12 +1017,28 @@ export default function ImportPage() {
         <div className="space-y-6">
           <StepBar active={stepIndex} />
 
-          {stage.type === "upload" && <UploadStage onValidated={(v) => void handleValidated(v)} />}
+          {stage.type === "upload" && (
+            <UploadStage
+              driveUrl={driveUrl}
+              setDriveUrl={setDriveUrl}
+              onValidated={(v) => void routeAfterValidation(v)}
+            />
+          )}
 
           {stage.type === "errors" && (
             <ErrorsStage
               validation={stage.validation}
-              onFixed={(v) => void handleFixed(v)}
+              driveUrl={driveUrl}
+              onFixed={(v) => void routeAfterValidation(v)}
+              onBack={() => setStage({ type: "upload" })}
+            />
+          )}
+
+          {stage.type === "input-required" && (
+            <InputRequiredStage
+              validation={stage.validation}
+              driveUrl={driveUrl}
+              onContinue={(v, entries) => void routeAfterValidation(v, entries)}
               onBack={() => setStage({ type: "upload" })}
             />
           )}
@@ -978,8 +1054,10 @@ export default function ImportPage() {
             <PreviewStage
               preview={stage.preview}
               validatedRows={stage.validatedRows}
+              driveUrl={driveUrl}
+              inputQuantities={stage.inputQuantities}
               onSubmit={(req) => void handleSubmit(req)}
-              onBack={() => setStage({ type: "errors", validation: { metric_columns: stage.preview.metric_columns, rows: stage.validatedRows, customer_errors: [], has_errors: false } })}
+              onBack={() => setStage({ type: "errors", validation: { metric_columns: stage.preview.metric_columns, rows: stage.validatedRows, customer_errors: [], has_errors: false, input_requirements: [] } })}
             />
           )}
 

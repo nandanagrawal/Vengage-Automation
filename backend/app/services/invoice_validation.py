@@ -9,10 +9,12 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.models.center import Center
 from app.models.customer import Customer
-from app.models.customer_product_and_service import CustomerProductAndService
+from app.models.customer_product_and_service import CustomerProductAndService, PricingType
 from app.models.invoice import Invoice
 from app.schemas.invoice_validation import (
     CustomerError,
+    InputQuantityEntry,
+    InputRequirement,
     PreviewCenter,
     PreviewCustomer,
     PreviewGroup,
@@ -21,6 +23,7 @@ from app.schemas.invoice_validation import (
     ValidatedRow,
     ValidationResponse,
 )
+from app.services import gdrive_client
 from app.services.invoice_generation import (
     ParsedFile,
     _build_line_items_for_center,
@@ -60,6 +63,8 @@ def _run_validation(
     rows: list[ValidatedRow],
     metric_columns: list[str],
     db: Session,
+    drive_folder_url: str | None = None,
+    input_quantities: list[InputQuantityEntry] | None = None,
 ) -> ValidationResponse:
     """Validate rows in-place; returns a fresh ValidationResponse."""
     center_ids_lower = [r.center_id.strip().lower() for r in rows if r.center_id.strip()]
@@ -81,6 +86,8 @@ def _run_validation(
             .selectinload(CustomerProductAndService.slabs),
             selectinload(Customer.customer_services)
             .selectinload(CustomerProductAndService.sheet_column),
+            selectinload(Customer.customer_services)
+            .selectinload(CustomerProductAndService.center),
         )
         .all()
     ) if customer_ids else []
@@ -115,25 +122,95 @@ def _run_validation(
             row.customer_id = cust.id
             row.customer_display_name = cust.display_name
 
-    # Customer-level checks
-    customer_errors: list[CustomerError] = []
+    centers_by_customer: dict[int, list[Center]] = {}
+    for c in centers_in_db:
+        centers_by_customer.setdefault(c.company_id, []).append(c)
+
+    customer_errors_by_id: dict[int, list[str]] = {}
+
+    def _add_customer_error(cust_id: int, msg: str) -> None:
+        customer_errors_by_id.setdefault(cust_id, []).append(msg)
+
+    # Customer-level checks, plus collect Input rows still needing a quantity
+    input_qty_by_cps_id = {
+        e.customer_product_and_service_id: e.quantity for e in (input_quantities or [])
+    }
+    input_requirements: list[InputRequirement] = []
+
     for cust in customers:
-        errs: list[str] = []
         if not cust.qbo_id:
-            errs.append("No QBO ID — sync customer first.")
+            _add_customer_error(cust.id, "No QBO ID — sync customer first.")
         if not cust.primary_email:
-            errs.append("No primary email address.")
+            _add_customer_error(cust.id, "No primary email address.")
         active = [
             cs for cs in cust.customer_services
             if cs.product_and_service.active and _has_valid_pricing(cs)
         ]
         if not active:
-            errs.append("No active services with valid rates.")
-        if errs:
-            customer_errors.append(CustomerError(
+            _add_customer_error(cust.id, "No active services with valid rates.")
+
+        matched_center_ids = {c.id for c in centers_by_customer.get(cust.id, [])}
+        for cs in active:
+            if cs.pricing_type != PricingType.input:
+                continue
+            # Customer-wide (center_id is None) rows always apply; centre-scoped
+            # ones only if that centre is actually in this batch.
+            if cs.center_id is not None and cs.center_id not in matched_center_ids:
+                continue
+            supplied = input_qty_by_cps_id.get(cs.id)
+            if supplied is not None and supplied > 0:
+                continue
+            input_requirements.append(InputRequirement(
+                customer_product_and_service_id=cs.id,
+                customer_id=cust.id,
                 customer_display_name=cust.display_name,
-                errors=errs,
+                product_name=cs.product_and_service.name,
+                description=cs.description,
+                center_id=cs.center_id,
+                center_name=cs.center.name if cs.center else None,
             ))
+
+    # Drive attachment check — blocking, not the old Preview-stage warning.
+    # Driven purely by whether a matched centre has a Drive file name
+    # configured (Center.drive_file_name_list()), not by any customer-level
+    # flag: a centre with names configured must have every one of them in
+    # the Drive folder; a centre with none configured is skipped entirely.
+    customers_needing_drive = [
+        cust
+        for cust in customers
+        if any(ctr.drive_file_name_list() for ctr in centers_by_customer.get(cust.id, []))
+    ]
+    if customers_needing_drive:
+        all_wanted: list[str] = [
+            name
+            for cust in customers_needing_drive
+            for ctr in centers_by_customer.get(cust.id, [])
+            for name in ctr.drive_file_name_list()
+        ]
+        drive_files: dict[str, dict] | None = None
+        drive_error: str | None = None
+        if not drive_folder_url:
+            drive_error = "A centre requires a Drive attachment but no Drive folder link was provided."
+        else:
+            try:
+                folder_id = gdrive_client.extract_folder_id(drive_folder_url)
+                drive_files = gdrive_client.match_exact_filenames(folder_id, all_wanted)
+            except Exception as e:  # noqa: BLE001 — surfaced per-customer below, not raised
+                drive_error = f"Could not read Drive folder: {e}"
+
+        for cust in customers_needing_drive:
+            if drive_error:
+                _add_customer_error(cust.id, drive_error)
+                continue
+            for ctr in centers_by_customer.get(cust.id, []):
+                for name in ctr.drive_file_name_list():
+                    if name.lower() not in (drive_files or {}):
+                        _add_customer_error(cust.id, f"Centre '{ctr.name}': Drive file '{name}' not found.")
+
+    customer_errors = [
+        CustomerError(customer_display_name=customer_by_id[cid].display_name, errors=errs)
+        for cid, errs in customer_errors_by_id.items()
+    ]
 
     has_errors = any(r.errors for r in rows) or bool(customer_errors)
     return ValidationResponse(
@@ -141,12 +218,15 @@ def _run_validation(
         rows=rows,
         customer_errors=customer_errors,
         has_errors=has_errors,
+        input_requirements=input_requirements,
     )
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
-def validate_file(filename: str, content: bytes, db: Session) -> ValidationResponse:
+def validate_file(
+    filename: str, content: bytes, db: Session, drive_folder_url: str | None = None,
+) -> ValidationResponse:
     parsed = parse_spreadsheet(filename, content)
 
     if not parsed.rows:
@@ -173,53 +253,16 @@ def validate_file(filename: str, content: bytes, db: Session) -> ValidationRespo
         )
         for i, (name_lower, metrics) in enumerate(parsed.rows.items())
     ]
-    return _run_validation(rows, parsed.metric_columns, db)
+    return _run_validation(rows, parsed.metric_columns, db, drive_folder_url=drive_folder_url)
 
 
 def revalidate(body: RevalidateRequest, db: Session) -> ValidationResponse:
     rows = [r.model_copy(deep=True) for r in body.rows]
-    return _run_validation(rows, body.metric_columns, db)
-
-
-def check_drive_attachments(rows: list[ValidatedRow], drive_folder_url: str, db: Session) -> list[str]:
-    """Pre-flight check for the Preview stage's Drive-folder field: for every
-    customer with add_attachment_in_mail=True, verify every matched center in
-    this batch has a file in the Drive folder. Returns human-readable warning
-    strings — empty means safe to generate (either everything matched, or no
-    customer in this batch requires an attachment)."""
-    from app.services import gdrive_client
-
-    try:
-        folder_id = gdrive_client.extract_folder_id(drive_folder_url)
-        drive_files = gdrive_client.match_center_files(folder_id)
-    except Exception as e:
-        return [f"Could not read Drive folder: {e}"]
-
-    center_ids_lower = [r.center_id.strip().lower() for r in rows if r.center_id.strip() and r.matched]
-    if not center_ids_lower:
-        return []
-
-    centers_in_db: list[Center] = (
-        db.query(Center).filter(sa_func.lower(Center.name).in_(center_ids_lower)).all()
+    return _run_validation(
+        rows, body.metric_columns, db,
+        drive_folder_url=body.drive_folder_url,
+        input_quantities=body.input_quantities,
     )
-    center_by_name: dict[str, Center] = {c.name.lower(): c for c in centers_in_db}
-    customer_ids = {c.company_id for c in centers_in_db}
-    customers: list[Customer] = db.query(Customer).filter(Customer.id.in_(customer_ids)).all()
-    customer_by_id: dict[int, Customer] = {c.id: c for c in customers}
-
-    warnings: list[str] = []
-    for name_lower in center_ids_lower:
-        ctr = center_by_name.get(name_lower)
-        if not ctr:
-            continue
-        customer = customer_by_id.get(ctr.company_id)
-        if not customer or not customer.add_attachment_in_mail:
-            continue
-        if name_lower not in drive_files:
-            warnings.append(
-                f"{customer.display_name} / {ctr.name}: attachment required but no matching file found in the Drive folder."
-            )
-    return warnings
 
 
 def build_preview(body: RevalidateRequest, db: Session) -> PreviewResponse:

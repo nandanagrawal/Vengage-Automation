@@ -101,20 +101,29 @@ def list_folder_files(folder_id: str) -> list[dict]:
     return files
 
 
-def match_center_files(folder_id: str) -> dict[str, dict]:
-    """{center_name_lower: {id, name, mimeType}} — one file per matched center
-    name (file name with the .xlsx/.xls extension stripped, lowercased), the
-    same case-insensitive convention used for the main sheet's Center ID
-    column. On a name collision the file with the latest modifiedTime wins.
+def match_exact_filenames(folder_id: str, wanted: list[str]) -> dict[str, dict]:
+    """{wanted_name_lower: {id, name, mimeType}} — exact filename match,
+    extension included, case-insensitive. `wanted` is the union of every
+    centre's configured Drive file name(s) (Center.drive_file_name_list()).
+    Only names actually found in the folder appear in the result; a folder
+    file that isn't in `wanted` at all is ignored. On a duplicate name in the
+    folder the most recently modified file wins.
+
+    Matching against list_folder_files (already filtered to spreadsheet-like
+    files) is what "checks the extension" — a same-named non-spreadsheet file
+    (or a real spreadsheet renamed to the wrong extension) never matches.
     """
+    wanted_lower = {w.strip().lower() for w in wanted if w.strip()}
+    if not wanted_lower:
+        return {}
     matched: dict[str, dict] = {}
     for f in list_folder_files(folder_id):
-        stem = _SPREADSHEET_EXT_RE.sub("", f.get("name", "")).strip().lower()
-        if not stem:
+        name_lower = f.get("name", "").strip().lower()
+        if name_lower not in wanted_lower:
             continue
-        existing = matched.get(stem)
+        existing = matched.get(name_lower)
         if existing is None or f.get("modifiedTime", "") > existing.get("modifiedTime", ""):
-            matched[stem] = f
+            matched[name_lower] = f
     return matched
 
 

@@ -386,7 +386,9 @@ def _normalize_product_name(name_lower: str) -> str:
 
 def _has_valid_pricing(cs: CustomerProductAndService) -> bool:
     """True if this mapping has a usable rate — a positive flat rate, at least
-    one slab tier with a positive rate, or (fixed) a positive rate AND quantity."""
+    one slab tier with a positive rate, (fixed) a positive rate AND quantity,
+    or (input) just a positive rate — its quantity isn't stored, it's typed in
+    fresh each run, checked separately at Validate time."""
     if cs.pricing_type == PricingType.slab:
         return any(slab.rate is not None and slab.rate > 0 for slab in cs.slabs)
     if cs.pricing_type == PricingType.fixed:
@@ -413,6 +415,28 @@ def _get_quantity(
         return None
     target = dynamic_column.strip().lower()
     return center_metrics.get(target)  # None if the exact column isn't in this row
+
+
+def _fixed_or_input_quantity(
+    cs: CustomerProductAndService, input_quantities: dict[int, Decimal]
+) -> Decimal | None:
+    """Resolve the quantity for a fixed/input row (no sheet column involved
+    for either). fixed uses its own stored quantity; input uses whatever was
+    typed in for this run — None (skip, same as an unmapped flat/slab column)
+    if nothing positive was supplied."""
+    if cs.pricing_type == PricingType.fixed:
+        return cs.quantity
+    if cs.pricing_type == PricingType.input:
+        qty = input_quantities.get(cs.id)
+        return qty if qty is not None and qty > 0 else None
+    return None
+
+
+def _fixed_or_input_description(cs: CustomerProductAndService, desc_month_year: str) -> str:
+    """"{description} for {Mon YY}", or "{product name} for {Mon YY}" with no
+    description — no centre name, unlike flat/slab lines."""
+    base = cs.description or cs.product_and_service.name
+    return f"{base} for {desc_month_year}" if desc_month_year else base
 
 
 # ── Invoice generation ────────────────────────────────────────────────────────
@@ -525,24 +549,35 @@ def _build_fixed_line_items(
     desc_month_year: str,
     service_date: date,
     tax_code_id: str = "",
+    input_quantities: dict[int, Decimal] | None = None,
 ) -> list[_LineItem]:
-    """One line item per fixed-pricing row: its configured quantity x rate, no
-    sheet column involved. Description is "{description} for {Mon YY}" (or
-    "{product name} for {Mon YY}" when the row has none).
+    """One line item per customer-wide (center_id is None) fixed/input row:
+    quantity x rate, no sheet column involved — fixed uses its own stored
+    quantity, input uses whatever quantity was typed in for this run.
+    Description is "{description} for {Mon YY}" (or "{product name} for
+    {Mon YY}" when the row has none).
 
-    Fixed charges belong to the customer, not to a centre — callers add these
-    to a customer's invoices ONCE per run (see include_fixed on
+    These belong to the customer, not to a centre — callers add them to a
+    customer's invoices ONCE per run (see include_fixed on
     _build_qbo_invoice_payload), not once per centre or per invoice.
+    Centre-scoped fixed/input rows (Partner customers) are NOT built here —
+    see _build_line_items_for_center, which builds each inline for its own
+    one centre instead.
     """
+    input_quantities = input_quantities or {}
     items: list[_LineItem] = []
     for cs in customer_services:
-        if cs.pricing_type != PricingType.fixed or not _has_valid_pricing(cs):
+        if cs.pricing_type not in (PricingType.fixed, PricingType.input):
             continue
-        base = cs.description or cs.product_and_service.name
-        description = f"{base} for {desc_month_year}" if desc_month_year else base
+        if cs.center_id is not None or not _has_valid_pricing(cs):
+            continue
+        qty = _fixed_or_input_quantity(cs, input_quantities)
+        if qty is None:
+            continue
+        description = _fixed_or_input_description(cs, desc_month_year)
         items.append(
             _make_line_item(
-                cs, cs.quantity, cs.rate, description,
+                cs, qty, cs.rate, description,
                 center_name="", service_date=service_date, tax_code_id=tax_code_id,
             )
         )
@@ -556,6 +591,8 @@ def _build_line_items_for_center(
     desc_month_year: str,
     service_date: date,
     tax_code_id: str = "",
+    center_db_id: int | None = None,
+    input_quantities: dict[int, Decimal] | None = None,
 ) -> list[_LineItem]:
     """Build _LineItem objects for one center, supporting slab-based pricing.
 
@@ -565,9 +602,18 @@ def _build_line_items_for_center(
         range_start), one line item per tier at that tier's own rate. E.g.
         total=2755, slabs (1-1000), (1001-2500), (2501+)
           → slab-1 qty=1000, slab-2 qty=1500, slab-3 qty=255
+      - fixed/input: customer-wide rows (center_id is None) are skipped here
+        entirely — see _build_fixed_line_items. Centre-scoped rows (Partner
+        customers) are built right here, once, since a centre appears on
+        exactly one invoice per run: quantity x rate, no sheet column.
+
+    `customer_services` may include rows scoped to OTHER centres (Direct and
+    Partner rows are mixed together at the caller); those are filtered out —
+    a row applies here only if it's customer-wide or belongs to this centre.
 
     Line items with zero quantity or zero rate are excluded from the output.
     """
+    input_quantities = input_quantities or {}
     col_b = center_name.strip()
 
     def _standard_desc(cs_description: str | None) -> str:
@@ -603,8 +649,23 @@ def _build_line_items_for_center(
     items: list[_LineItem] = []
 
     for cs in customer_services:
-        if cs.pricing_type == PricingType.fixed:
-            continue  # fixed rows read no sheet column — added once per customer, see _build_fixed_line_items
+        # Customer-wide rows (center_id None) apply on every centre; a
+        # centre-scoped row (Partner customer) only applies to its own centre.
+        if cs.center_id is not None and cs.center_id != center_db_id:
+            continue
+
+        if cs.pricing_type in (PricingType.fixed, PricingType.input):
+            # Customer-wide fixed/input (center_id None) is handled once per
+            # customer by _build_fixed_line_items instead — only build it
+            # here when it's scoped to this specific centre.
+            if cs.center_id is None or not _has_valid_pricing(cs):
+                continue
+            qty = _fixed_or_input_quantity(cs, input_quantities)
+            if qty is None:
+                continue
+            items.append(_make_item(cs, qty, cs.rate, _fixed_or_input_description(cs, desc_month_year)))
+            continue
+
         ps = cs.product_and_service
         dynamic_column = cs.sheet_column.name if cs.sheet_column else None
         raw_total = _get_quantity(center_metrics, dynamic_column)
@@ -635,10 +696,13 @@ def _build_qbo_invoice_payload(
     inv_date: date,
     tax_code_id: str = "",
     include_fixed: bool = False,
+    input_quantities: dict[int, Decimal] | None = None,
 ) -> tuple[dict[str, Any], Decimal, list[_LineItem]] | None:
     """Build the QBO invoice payload with per-center line items, plus — when
-    `include_fixed` — the customer's fixed-pricing lines (added once per
-    customer per run, so the caller decides which invoice carries them)."""
+    `include_fixed` — the customer's customer-wide fixed/input lines (added
+    once per customer per run, so the caller decides which invoice carries
+    them). Centre-scoped fixed/input rows (Partner customers) are built
+    inline per centre regardless of `include_fixed`."""
     due = _due_date(inv_date, customer.payment_terms_days)
     memo = _memo(inv_date)
     memo_stmt = _memo_on_statement(inv_date)
@@ -663,12 +727,16 @@ def _build_qbo_invoice_payload(
             desc_month_year=dmyear,
             service_date=inv_date,
             tax_code_id=tax_code_id,
+            center_db_id=ctr.id,
+            input_quantities=input_quantities,
         )
         all_line_items.extend(items)
 
     if include_fixed:
         all_line_items.extend(
-            _build_fixed_line_items(customer_services, dmyear, inv_date, tax_code_id)
+            _build_fixed_line_items(
+                customer_services, dmyear, inv_date, tax_code_id, input_quantities=input_quantities,
+            )
         )
 
     if not all_line_items:
@@ -704,19 +772,11 @@ def generate_invoices_from_parsed(
     parsed: ParsedFile,
     invoice_upload_id: int | None = None,
     drive_folder_url: str | None = None,
+    input_quantities: dict[int, Decimal] | None = None,
 ) -> GenerationResult:
     """Run invoice generation from a pre-built ParsedFile (skips file parsing)."""
     result = GenerationResult()
-
-    # Resolve the Drive folder once for the whole run (not per-invoice) — a
-    # bad link/no access is reported but never blocks invoice creation.
-    drive_files: dict[str, dict] | None = None
-    if drive_folder_url:
-        try:
-            folder_id = gdrive_client.extract_folder_id(drive_folder_url)
-            drive_files = gdrive_client.match_center_files(folder_id)
-        except Exception as e:  # noqa: BLE001 — Drive access issues must not block generation
-            result.errors.append(f"Could not read Drive folder for attachments: {e}")
+    input_quantities = input_quantities or {}
 
     # Resolve the configured tax code name (e.g. "GST") to its QBO Id (e.g. "5").
     # Australian QBO requires the numeric Id, not the name string.
@@ -749,6 +809,25 @@ def generate_invoices_from_parsed(
         result.errors.append("No centers in the file matched any center in the database.")
         return result
 
+    # Resolve the Drive folder once for the whole run (not per-invoice) — a
+    # bad link/no access is reported but never blocks invoice creation. By
+    # generation time this has already passed the blocking Validate-stage
+    # check for any customer that requires an attachment, so a miss here is
+    # unexpected (the folder changed between Validate and Generate) rather
+    # than the normal case.
+    drive_files: dict[str, dict] | None = None
+    if drive_folder_url:
+        try:
+            folder_id = gdrive_client.extract_folder_id(drive_folder_url)
+            wanted_filenames = [
+                name
+                for n in matched_names
+                for name in center_by_name[n].drive_file_name_list()
+            ]
+            drive_files = gdrive_client.match_exact_filenames(folder_id, wanted_filenames)
+        except Exception as e:  # noqa: BLE001 — Drive access issues must not block generation
+            result.errors.append(f"Could not read Drive folder for attachments: {e}")
+
     customer_ids: set[int] = {center_by_name[n].company_id for n in matched_names}
     customers: list[Customer] = (
         db.query(Customer)
@@ -760,6 +839,8 @@ def generate_invoices_from_parsed(
             .selectinload(CustomerProductAndService.slabs),
             selectinload(Customer.customer_services)
             .selectinload(CustomerProductAndService.sheet_column),
+            selectinload(Customer.customer_services)
+            .selectinload(CustomerProductAndService.center),
         )
         .all()
     )
@@ -816,10 +897,15 @@ def generate_invoices_from_parsed(
             key = inv.id if inv else None
             group_map.setdefault(key, []).append(name_lower)
 
-        # A customer's fixed charges go on ONE of its invoices per run — the
-        # first one that actually gets created — so a customer with several
-        # standalone centres isn't billed the same fixed charge repeatedly.
-        fixed_pending = any(cs.pricing_type == PricingType.fixed for cs in active_services)
+        # A customer's customer-wide fixed/input charges go on ONE of its
+        # invoices per run — the first one that actually gets created — so a
+        # customer with several standalone centres isn't billed the same
+        # charge repeatedly. Centre-scoped (Partner) fixed/input rows are not
+        # part of this — each is built once per its own centre instead.
+        fixed_pending = any(
+            cs.pricing_type in (PricingType.fixed, PricingType.input) and cs.center_id is None
+            for cs in active_services
+        )
 
         for group_key, group_name_lowers in group_map.items():
             group_center_names = [center_by_name[n].name for n in group_name_lowers]
@@ -837,6 +923,7 @@ def generate_invoices_from_parsed(
                     tax_code_id=tax_code_id,
                     drive_files=drive_files,
                     include_fixed=fixed_pending,
+                    input_quantities=input_quantities,
                 )
             else:
                 _create_and_send(
@@ -849,6 +936,7 @@ def generate_invoices_from_parsed(
                     tax_code_id=tax_code_id,
                     drive_files=drive_files,
                     include_fixed=fixed_pending,
+                    input_quantities=input_quantities,
                 )
 
             if result.invoices_created > created_before:
@@ -866,6 +954,7 @@ def generate_invoices(
     content: bytes,
     invoice_upload_id: int | None = None,
     drive_folder_url: str | None = None,
+    input_quantities: dict[int, Decimal] | None = None,
 ) -> GenerationResult:
     result = GenerationResult()
 
@@ -874,7 +963,7 @@ def generate_invoices(
     return generate_invoices_from_parsed(
         db=db, qbo=qbo, access_token=access_token, realm_id=realm_id,
         parsed=parsed, invoice_upload_id=invoice_upload_id,
-        drive_folder_url=drive_folder_url,
+        drive_folder_url=drive_folder_url, input_quantities=input_quantities,
     )
 
 
@@ -885,28 +974,35 @@ def _attach_center_files(
     inv_id: str,
     customer_name: str,
     center_names: list[str],
+    center_by_name: dict[str, Center],
     drive_files: dict[str, dict],
     result: GenerationResult,
 ) -> None:
-    """Attach each matched center's Drive file to the already-created invoice.
+    """Attach every configured Drive file name for each center on this
+    invoice — a centre can list more than one (Center.drive_file_name_list).
     Never raises — a missing match or a download/attach failure is recorded
-    as a warning on `result` and the rest of the centers are still tried; the
-    invoice itself has already been created successfully by this point."""
+    as a warning on `result` and the rest are still tried; the invoice itself
+    has already been created successfully by this point."""
     for name in center_names:
-        f = drive_files.get(name.strip().lower())
-        if f is None:
-            result.errors.append(
-                f"Customer '{customer_name}' / {name}: no matching Drive file — "
-                "invoice created without attachment."
-            )
+        ctr = center_by_name.get(name.strip().lower())
+        wanted = ctr.drive_file_name_list() if ctr else []
+        if not wanted:
             continue
-        try:
-            content, content_type = gdrive_client.download_file(f["id"], f.get("mimeType", ""))
-            qbo.attach_to_invoice(access_token, realm_id, inv_id, f["name"], content_type, content)
-        except Exception as e:  # noqa: BLE001 — one bad attachment must not fail the invoice
-            result.errors.append(
-                f"Customer '{customer_name}' / {name}: failed to attach Drive file — {e}"
-            )
+        for filename in wanted:
+            f = drive_files.get(filename.strip().lower())
+            if f is None:
+                result.errors.append(
+                    f"Customer '{customer_name}' / {name}: Drive file '{filename}' not found — "
+                    "invoice created without that attachment."
+                )
+                continue
+            try:
+                content, content_type = gdrive_client.download_file(f["id"], f.get("mimeType", ""))
+                qbo.attach_to_invoice(access_token, realm_id, inv_id, f["name"], content_type, content)
+            except Exception as e:  # noqa: BLE001 — one bad attachment must not fail the invoice
+                result.errors.append(
+                    f"Customer '{customer_name}' / {name}: failed to attach '{filename}' — {e}"
+                )
 
 
 def _create_and_send(
@@ -926,6 +1022,7 @@ def _create_and_send(
     tax_code_id: str = "",
     drive_files: dict[str, dict] | None = None,
     include_fixed: bool = False,
+    input_quantities: dict[int, Decimal] | None = None,
 ) -> None:
     if is_standalone and len(center_names) == 1:
         label = f"{center_names[0]} (standalone)"
@@ -940,6 +1037,7 @@ def _create_and_send(
         inv_date=inv_date,
         tax_code_id=tax_code_id,
         include_fixed=include_fixed,
+        input_quantities=input_quantities,
     )
     if built is None:
         result.errors.append(
@@ -954,11 +1052,12 @@ def _create_and_send(
         inv_id = str(qbo_inv.get("Id", ""))
         inv_number: str | None = qbo_inv.get("DocNumber") or None
 
-        if drive_files is not None and inv_id and customer.add_attachment_in_mail:
+        if drive_files is not None and inv_id:
             _attach_center_files(
                 qbo=qbo, access_token=access_token, realm_id=realm_id,
                 inv_id=inv_id, customer_name=customer.display_name,
-                center_names=center_names, drive_files=drive_files, result=result,
+                center_names=center_names, center_by_name=center_by_name,
+                drive_files=drive_files, result=result,
             )
 
         gen_inv_id: int | None = None
@@ -1027,6 +1126,9 @@ def build_line_item_preview(body: "RevalidateRequest", db: Session) -> dict:
     from app.services.invoice_validation import _rows_to_parsed_file
 
     parsed = _rows_to_parsed_file(body.rows, body.metric_columns)
+    input_quantities: dict[int, Decimal] = {
+        e.customer_product_and_service_id: e.quantity for e in body.input_quantities
+    }
     # Preview uses the PREVIOUS month's last day (invoices are for the period just ended)
     today = date.today()
     first_of_current = date(today.year, today.month, 1)
@@ -1070,6 +1172,8 @@ def build_line_item_preview(body: "RevalidateRequest", db: Session) -> dict:
             .selectinload(CustomerProductAndService.slabs),
             selectinload(Customer.customer_services)
             .selectinload(CustomerProductAndService.sheet_column),
+            selectinload(Customer.customer_services)
+            .selectinload(CustomerProductAndService.center),
         )
         .all()
     )
@@ -1118,9 +1222,13 @@ def build_line_item_preview(body: "RevalidateRequest", db: Session) -> dict:
             key = center_id_to_inv.get(ctr.id)
             group_map.setdefault(key.id if key else None, []).append(name_lower)
 
-        # Mirrors generate_invoices_from_parsed: a customer's fixed charges ride
-        # on the first invoice that gets produced, not on every one.
-        fixed_pending = any(cs.pricing_type == PricingType.fixed for cs in active_services)
+        # Mirrors generate_invoices_from_parsed: a customer's customer-wide
+        # fixed/input charges ride on the first invoice that gets produced,
+        # not on every one.
+        fixed_pending = any(
+            cs.pricing_type in (PricingType.fixed, PricingType.input) and cs.center_id is None
+            for cs in active_services
+        )
 
         for _group_key, group_names_lower in group_map.items():
             line_items: list[dict] = []
@@ -1147,11 +1255,15 @@ def build_line_item_preview(body: "RevalidateRequest", db: Session) -> dict:
                     customer_services=active_services,
                     desc_month_year=dmyear,
                     service_date=inv_date,
+                    center_db_id=center_by_name[name_lower].id,
+                    input_quantities=input_quantities,
                 ))
 
             if fixed_pending:
                 _add_preview_lines(
-                    _build_fixed_line_items(active_services, dmyear, inv_date)
+                    _build_fixed_line_items(
+                        active_services, dmyear, inv_date, input_quantities=input_quantities,
+                    )
                 )
 
             if line_items:

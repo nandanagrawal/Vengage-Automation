@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from decimal import Decimal
+
 from pydantic import BaseModel
 
 
@@ -21,16 +23,43 @@ class CustomerError(BaseModel):
     errors: list[str]
 
 
+class InputRequirement(BaseModel):
+    """One 'Input'-priced service row still needing a quantity typed in for
+    this run. Not a blocking error by itself — the frontend shows a number
+    box for each of these between Validate and Preview; the list is
+    unsatisfied-only, so it empties out as quantities are supplied."""
+    customer_product_and_service_id: int
+    customer_id: int
+    customer_display_name: str
+    product_name: str
+    description: str | None
+    center_id: int | None
+    center_name: str | None
+
+
+class InputQuantityEntry(BaseModel):
+    customer_product_and_service_id: int
+    quantity: Decimal
+
+
 class ValidationResponse(BaseModel):
     metric_columns: list[str]
     rows: list[ValidatedRow]
     customer_errors: list[CustomerError] = []
     has_errors: bool
+    input_requirements: list[InputRequirement] = []
 
 
 class RevalidateRequest(BaseModel):
     metric_columns: list[str]
     rows: list[ValidatedRow]
+    # Optional Drive folder link — checked here (not just at Generate) so a
+    # customer requiring an attachment with no matching file is a blocking
+    # validation error. See app/services/gdrive_client.py.
+    drive_folder_url: str | None = None
+    # Quantities typed in for "input"-priced service rows so far this run —
+    # unsatisfied ones come back in ValidationResponse.input_requirements.
+    input_quantities: list[InputQuantityEntry] = []
 
 
 # ── Preview ───────────────────────────────────────────────────────────────────
@@ -67,17 +96,10 @@ class GenerateRequest(BaseModel):
     rows: list[ValidatedRow]
     # Optional Drive folder link holding per-center raw-data files (e.g.
     # "VNG-IMG-60.xlsx") — each matched center's file is attached to its
-    # QBO invoice. See app/services/gdrive_client.py.
+    # QBO invoice. See app/services/gdrive_client.py. Already checked as a
+    # blocking Validate-stage error (see RevalidateRequest.drive_folder_url);
+    # carried again here since it's the actual download/attach step.
     drive_folder_url: str | None = None
-
-
-class DriveAttachmentCheckRequest(BaseModel):
-    metric_columns: list[str]
-    rows: list[ValidatedRow]
-    drive_folder_url: str
-
-
-class DriveAttachmentCheckResponse(BaseModel):
-    # One entry per customer/center that has add_attachment_in_mail=True but
-    # no matching file in the Drive folder. Empty = safe to generate.
-    warnings: list[str] = []
+    # Quantities typed in for "input"-priced service rows — required (and
+    # already enforced) to be complete by the time Generate is called.
+    input_quantities: list[InputQuantityEntry] = []

@@ -467,6 +467,145 @@ def test_customer_can_carry_several_fixed_rows_for_one_product(admin_client, fak
     assert len(r.json()["customer_services"]) == 2
 
 
+def test_customer_input_pricing_needs_no_sheet_column_or_quantity(admin_client, fake_qbo):
+    pid = _synced_product_id(admin_client, fake_qbo, "32", "Input Fee Widget")
+    r = admin_client.post(
+        "/api/v1/customers",
+        json={**_BASE, "display_name": "Input Co", "customer_services": [
+            {"product_and_service_id": pid, "pricing_type": "input", "rate": "150.00", "description": "Preread"}
+        ]},
+    )
+    assert r.status_code == 200, r.text
+    svc = r.json()["customer_services"][0]
+    assert svc["pricing_type"] == "input"
+    assert svc["quantity"] is None
+    assert float(svc["rate"]) == 150.0
+    assert svc["sheet_column_id"] is None
+
+
+def test_customer_input_pricing_requires_rate(admin_client, fake_qbo):
+    pid = _synced_product_id(admin_client, fake_qbo, "33", "Input Missing Rate Widget")
+    r = admin_client.post(
+        "/api/v1/customers",
+        json={**_BASE, "display_name": "Bad Input Co", "customer_services": [
+            {"product_and_service_id": pid, "pricing_type": "input"}
+        ]},
+    )
+    assert r.status_code == 422
+
+
+def test_customer_input_pricing_rejects_sheet_column_and_quantity(admin_client, fake_qbo):
+    pid = _synced_product_id(admin_client, fake_qbo, "34", "Input Extra Fields Widget")
+    col_id = _sheet_column_id(admin_client, "Input Should Not Have Col")
+    for svc in (
+        {"product_and_service_id": pid, "pricing_type": "input", "rate": "10.00", "sheet_column_id": col_id},
+        {"product_and_service_id": pid, "pricing_type": "input", "rate": "10.00", "quantity": "2"},
+    ):
+        r = admin_client.post(
+            "/api/v1/customers",
+            json={**_BASE, "display_name": "Input Extra Co", "customer_services": [svc]},
+        )
+        assert r.status_code == 422, svc
+
+
+# ── Customer category / Partner centre-scoped services ─────────────────────────
+
+def _make_center_via_api(admin_client, customer_id: int, name: str, drive_file_names: str | None = None) -> int:
+    body: dict = {"name": name}
+    if drive_file_names is not None:
+        body["drive_file_names"] = drive_file_names
+    r = admin_client.post(f"/api/v1/customers/{customer_id}/centers", json=body)
+    assert r.status_code == 200, r.text
+    return r.json()["id"]
+
+
+def test_customer_category_defaults_to_direct(admin_client, fake_qbo):
+    r = admin_client.post("/api/v1/customers", json={**_BASE, "display_name": "Default Category Co"})
+    assert r.status_code == 200, r.text
+    assert r.json()["category"] == "direct"
+
+
+def test_direct_customer_service_rejects_a_center_id(admin_client, fake_qbo):
+    pid = _synced_product_id(admin_client, fake_qbo, "35", "Direct Widget")
+    col_id = _sheet_column_id(admin_client, "Direct Widget Col")
+    cid = admin_client.post("/api/v1/customers", json={**_BASE, "display_name": "Direct Centre Co"}).json()["id"]
+    center_id = _make_center_via_api(admin_client, cid, "Direct Centre")
+
+    r = admin_client.patch(
+        f"/api/v1/customers/{cid}",
+        json={"customer_services": [
+            {"product_and_service_id": pid, "sheet_column_id": col_id, "center_id": center_id, "rate": "10.00"}
+        ]},
+    )
+    assert r.status_code == 422
+
+
+def test_partner_customer_service_requires_a_center_id(admin_client, fake_qbo):
+    pid = _synced_product_id(admin_client, fake_qbo, "36", "Partner Widget")
+    col_id = _sheet_column_id(admin_client, "Partner Widget Col")
+    cid = admin_client.post(
+        "/api/v1/customers", json={**_BASE, "display_name": "Partner No Centre Co", "category": "partner"},
+    ).json()["id"]
+
+    r = admin_client.patch(
+        f"/api/v1/customers/{cid}",
+        json={"customer_services": [
+            {"product_and_service_id": pid, "sheet_column_id": col_id, "rate": "10.00"}
+        ]},
+    )
+    assert r.status_code == 422
+
+
+def test_partner_customer_service_with_its_own_center_succeeds(admin_client, fake_qbo):
+    pid = _synced_product_id(admin_client, fake_qbo, "37", "Partner Good Widget")
+    col_id = _sheet_column_id(admin_client, "Partner Good Widget Col")
+    cid = admin_client.post(
+        "/api/v1/customers", json={**_BASE, "display_name": "Partner Co", "category": "partner"},
+    ).json()["id"]
+    center_id = _make_center_via_api(admin_client, cid, "Partner Centre")
+
+    r = admin_client.patch(
+        f"/api/v1/customers/{cid}",
+        json={"customer_services": [
+            {"product_and_service_id": pid, "sheet_column_id": col_id, "center_id": center_id, "rate": "10.00"}
+        ]},
+    )
+    assert r.status_code == 200, r.text
+    svc = r.json()["customer_services"][0]
+    assert svc["center_id"] == center_id
+    assert svc["center_name"] == "Partner Centre"
+
+
+def test_partner_customer_service_rejects_another_customers_center(admin_client, fake_qbo):
+    pid = _synced_product_id(admin_client, fake_qbo, "38", "Partner Cross Widget")
+    col_id = _sheet_column_id(admin_client, "Partner Cross Widget Col")
+    cid_a = admin_client.post(
+        "/api/v1/customers", json={**_BASE, "display_name": "Partner A Co", "category": "partner"},
+    ).json()["id"]
+    cid_b = admin_client.post(
+        "/api/v1/customers", json={**_BASE, "display_name": "Partner B Co", "category": "partner"},
+    ).json()["id"]
+    other_center_id = _make_center_via_api(admin_client, cid_b, "B's Centre")
+
+    r = admin_client.patch(
+        f"/api/v1/customers/{cid_a}",
+        json={"customer_services": [
+            {"product_and_service_id": pid, "sheet_column_id": col_id, "center_id": other_center_id, "rate": "10.00"}
+        ]},
+    )
+    assert r.status_code == 422
+
+
+def test_center_drive_file_names_round_trip(admin_client, fake_qbo):
+    cid = admin_client.post("/api/v1/customers", json={**_BASE, "display_name": "Drive Filenames Co"}).json()["id"]
+    r = admin_client.post(
+        f"/api/v1/customers/{cid}/centers",
+        json={"name": "VNG-IMG-14-A", "drive_file_names": "VNG-IMG-14-A.xlsx, VNG-IMG-14-A-B.xls"},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["drive_file_names"] == "VNG-IMG-14-A.xlsx, VNG-IMG-14-A-B.xls"
+
+
 def test_qbo_customer_payload_excludes_app_service_links():
     from app.models.customer import Customer
     from app.services.qbo_client import customer_model_to_qbo_payload

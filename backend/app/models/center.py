@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, func
+from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
@@ -18,6 +18,10 @@ class Center(Base):
         Integer, ForeignKey("customers.id", ondelete="CASCADE"), nullable=False, index=True
     )
     name: Mapped[str] = mapped_column(String(500), nullable=False, unique=True, index=True)
+    # Comma-separated exact Google Drive file name(s) for this centre, extension
+    # included (e.g. "VNG-IMG-14-A.xlsx, VNG-IMG-14-A-B.xls") — looked up in the
+    # Drive folder given at Validate time. See gdrive_client.match_exact_filenames.
+    drive_file_names: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
@@ -27,3 +31,9 @@ class Center(Base):
     )
 
     company: Mapped["Customer"] = relationship("Customer", back_populates="centers")
+
+    def drive_file_name_list(self) -> list[str]:
+        """Parsed, trimmed, non-empty entries from drive_file_names."""
+        if not self.drive_file_names:
+            return []
+        return [n.strip() for n in self.drive_file_names.split(",") if n.strip()]

@@ -1,7 +1,7 @@
 import json
 import re
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile, File
+from fastapi import APIRouter, BackgroundTasks, Depends, Form, HTTPException, UploadFile, File
 from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import get_current_user, get_qbo_client, get_db
@@ -12,8 +12,6 @@ from app.models.invoice_upload import InvoiceUpload
 from app.models.product_and_service import ProductAndService
 from app.models.user import User
 from app.schemas.invoice_validation import (
-    DriveAttachmentCheckRequest,
-    DriveAttachmentCheckResponse,
     GenerateRequest,
     PreviewResponse,
     RevalidateRequest,
@@ -26,7 +24,6 @@ from app.services.invoice_generation import (
 )
 from app.services.invoice_validation import (
     build_preview,
-    check_drive_attachments,
     revalidate,
     validate_file,
     _rows_to_parsed_file,
@@ -277,6 +274,7 @@ def delete_generated_invoice(
 @router.post("/invoice-uploads/validate", response_model=ValidationResponse, status_code=200)
 def validate_upload(
     file: UploadFile = File(...),
+    drive_folder_url: str | None = Form(None),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -287,7 +285,7 @@ def validate_upload(
     if len(content) > _MAX_BYTES:
         raise HTTPException(status_code=413, detail="File too large (max 10 MB).")
     try:
-        return validate_file(filename, content, db)
+        return validate_file(filename, content, db, drive_folder_url=drive_folder_url)
     except Exception as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -308,19 +306,6 @@ def preview_upload(
     user: User = Depends(get_current_user),
 ):
     return build_preview(body, db)
-
-
-@router.post("/invoice-uploads/check-drive-attachments", response_model=DriveAttachmentCheckResponse, status_code=200)
-def check_drive_attachments_route(
-    body: DriveAttachmentCheckRequest,
-    db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
-):
-    """Pre-flight check before generating: any customer with add_attachment_in_mail
-    whose center has no matching file in the given Drive folder is reported here
-    so the UI can warn and let the user decide before invoices are created."""
-    warnings = check_drive_attachments(body.rows, body.drive_folder_url, db)
-    return DriveAttachmentCheckResponse(warnings=warnings)
 
 
 def _run_generation_bg(upload_id: int, body_dict: dict) -> None:
@@ -357,6 +342,10 @@ def _run_generation_bg(upload_id: int, body_dict: dict) -> None:
             parsed=parsed,
             invoice_upload_id=upload_id,
             drive_folder_url=body_dict.get("drive_folder_url"),
+            input_quantities={
+                e["customer_product_and_service_id"]: e["quantity"]
+                for e in body_dict.get("input_quantities", [])
+            },
         )
         final_status = (
             "completed" if result.invoices_failed == 0

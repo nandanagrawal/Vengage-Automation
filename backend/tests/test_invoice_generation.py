@@ -8,7 +8,7 @@ from decimal import Decimal
 import pytest
 
 from app.models.center import Center
-from app.models.customer import Customer, CustomerStatus
+from app.models.customer import Customer, CustomerCategory, CustomerStatus
 from app.models.customer_product_and_service import (
     CustomerProductAndService,
     CustomerProductAndServiceSlab,
@@ -81,6 +81,7 @@ def _make_service_code(db, code: str) -> ServiceCode:
 def _make_customer(
     db, display_name: str, qbo_id: str | None = None, email: str | None = None,
     payment_terms_days: int | None = None, add_attachment_in_mail: bool = False,
+    category: CustomerCategory = CustomerCategory.direct,
 ) -> Customer:
     c = Customer(
         display_name=display_name,
@@ -89,6 +90,7 @@ def _make_customer(
         primary_email=email,
         ship_same_as_billing=True,
         add_attachment_in_mail=add_attachment_in_mail,
+        category=category,
         **({"payment_terms_days": payment_terms_days} if payment_terms_days is not None else {}),
     )
     db.add(c)
@@ -97,8 +99,8 @@ def _make_customer(
     return c
 
 
-def _make_center(db, company_id: int, name: str) -> Center:
-    c = Center(company_id=company_id, name=name)
+def _make_center(db, company_id: int, name: str, drive_file_names: str | None = None) -> Center:
+    c = Center(company_id=company_id, name=name, drive_file_names=drive_file_names)
     db.add(c)
     db.commit()
     db.refresh(c)
@@ -127,7 +129,7 @@ def _get_or_create_sheet_column(db, name: str) -> SheetColumn:
 
 def _link_service(
     db, customer, ps, sc, rate: float,
-    column: str | bool | None = None, description: str | None = None,
+    column: str | bool | None = None, description: str | None = None, center: Center | None = None,
 ) -> CustomerProductAndService:
     # `sc` (ServiceCode) is accepted for call-site compatibility but no longer
     # linked — service_code_id was dropped from CustomerProductAndService.
@@ -140,12 +142,16 @@ def _link_service(
     # product name, or `column=False` to leave the row unmapped. The same
     # product can now be linked more than once for one customer as long as
     # each occurrence uses a different column.
+    #
+    # `center`: pass a Center to scope this row to it (Partner-style); leave
+    # unset for a customer-wide row (Direct-style, the default).
     sheet_column_id = None
     if column is not False:
         sheet_column_id = _get_or_create_sheet_column(db, column or ps.name).id
     cps = CustomerProductAndService(
         customer_id=customer.id,
         product_and_service_id=ps.id,
+        center_id=center.id if center else None,
         pricing_type=PricingType.flat,
         rate=Decimal(str(rate)),
         sheet_column_id=sheet_column_id,
@@ -159,11 +165,13 @@ def _link_service(
 
 def _link_fixed_service(
     db, customer, ps, quantity: float, rate: float, description: str | None = None,
+    center: Center | None = None,
 ) -> CustomerProductAndService:
     """A fixed-pricing row: reads no sheet column, bills quantity x rate."""
     cps = CustomerProductAndService(
         customer_id=customer.id,
         product_and_service_id=ps.id,
+        center_id=center.id if center else None,
         pricing_type=PricingType.fixed,
         quantity=Decimal(str(quantity)),
         rate=Decimal(str(rate)),
@@ -175,9 +183,28 @@ def _link_fixed_service(
     return cps
 
 
+def _link_input_service(
+    db, customer, ps, rate: float, description: str | None = None, center: Center | None = None,
+) -> CustomerProductAndService:
+    """An input-pricing row: reads no sheet column, stores no quantity — the
+    quantity is supplied at generation time via input_quantities."""
+    cps = CustomerProductAndService(
+        customer_id=customer.id,
+        product_and_service_id=ps.id,
+        center_id=center.id if center else None,
+        pricing_type=PricingType.input,
+        rate=Decimal(str(rate)),
+        description=description,
+    )
+    db.add(cps)
+    db.commit()
+    db.refresh(cps)
+    return cps
+
+
 def _link_slab_service(
     db, customer, ps, tiers: list[tuple[int, int | None, float]],
-    column: str | None = None, description: str | None = None,
+    column: str | None = None, description: str | None = None, center: Center | None = None,
 ) -> CustomerProductAndService:
     """tiers: list of (range_start, range_end_or_None, rate).
 
@@ -189,6 +216,7 @@ def _link_slab_service(
     cps = CustomerProductAndService(
         customer_id=customer.id,
         product_and_service_id=ps.id,
+        center_id=center.id if center else None,
         pricing_type=PricingType.slab,
         sheet_column_id=sheet_column_id,
         description=description,
@@ -1056,12 +1084,197 @@ def test_preview_shows_fixed_line_once_per_customer(db_session):
     assert per_invoice[0][0]["amount"] == pytest.approx(100.0)
 
 
+# ── Partner customers (centre-scoped services) ─────────────────────────────────
+
+def test_partner_centre_scoped_flat_row_only_applies_to_its_own_centre(db_session):
+    """A centre-scoped service only produces a line for its own centre, even
+    when grouped with a sibling centre on the same invoice."""
+    sc = _make_service_code(db_session, "B0014")
+    customer = _make_customer(
+        db_session, "Partner Co", qbo_id="qbo-partner1", email="p1@p1.com",
+        category=CustomerCategory.partner,
+    )
+    ctr_a = _make_center(db_session, customer.id, "PARA")
+    ctr_b = _make_center(db_session, customer.id, "PARB")
+    _make_grouping(db_session, customer.id, [ctr_a, ctr_b])
+    ps = _make_product(db_session, "Gardening", "qbo-partner1-g")
+    _link_service(db_session, customer, ps, sc, 5.0, center=ctr_a)  # only centre A
+
+    qbo = FakeQBO()
+    csv_bytes = _make_raw_csv([("PARA", {"Gardening": 3}), ("PARB", {"Gardening": 7})], ["Gardening"])
+    result = generate_invoices(db_session, qbo, "tok", "realm", "f.csv", csv_bytes)
+
+    assert result.invoices_created == 1
+    lines = qbo.invoices[0]["Line"]
+    assert len(lines) == 1
+    assert lines[0]["SalesItemLineDetail"]["Qty"] == 3.0
+
+
+def test_partner_same_product_different_centres_priced_independently(db_session):
+    sc = _make_service_code(db_session, "B0015")
+    customer = _make_customer(
+        db_session, "Partner Two Co", qbo_id="qbo-partner2", email="p2@p2.com",
+        category=CustomerCategory.partner,
+    )
+    ctr_a = _make_center(db_session, customer.id, "PARA")
+    ctr_b = _make_center(db_session, customer.id, "PARB")
+    _make_grouping(db_session, customer.id, [ctr_a, ctr_b])
+    ps = _make_product(db_session, "Gardening", "qbo-partner2-g")
+    _link_service(db_session, customer, ps, sc, 5.0, center=ctr_a)
+    _link_service(db_session, customer, ps, sc, 9.0, center=ctr_b)
+
+    qbo = FakeQBO()
+    csv_bytes = _make_raw_csv([("PARA", {"Gardening": 3}), ("PARB", {"Gardening": 3})], ["Gardening"])
+    result = generate_invoices(db_session, qbo, "tok", "realm", "f.csv", csv_bytes)
+
+    assert result.invoices_created == 1
+    lines = qbo.invoices[0]["Line"]
+    assert len(lines) == 2
+    amounts = sorted(l["Amount"] for l in lines)
+    assert amounts == pytest.approx([15.0, 27.0])
+
+
+def test_partner_centre_scoped_fixed_bills_once_on_its_own_centres_invoice(db_session):
+    """A centre-scoped fixed row only appears on the invoice that actually
+    contains its own centre — not on a sibling invoice for other centres.
+
+    All of a customer's *ungrouped* centres land on one shared invoice (see
+    the other Fixed-pricing tests), so — same as them — this needs an
+    explicit grouping to get two separate invoices to compare."""
+    sc = _make_service_code(db_session, "B0016")
+    customer = _make_customer(
+        db_session, "Partner Fixed Co", qbo_id="qbo-partner3", email="p3@p3.com",
+        category=CustomerCategory.partner,
+    )
+    ctr_a = _make_center(db_session, customer.id, "PARA")
+    ctr_b = _make_center(db_session, customer.id, "PARB")
+    ctr_c = _make_center(db_session, customer.id, "PARC")
+    _make_grouping(db_session, customer.id, [ctr_a, ctr_b])  # PARA+PARB share one invoice; PARC is standalone
+    gardening = _make_product(db_session, "Gardening", "qbo-partner3-g")
+    fee = _make_product(db_session, "Implementation Charges B0004", "qbo-partner3-fee")
+    _link_service(db_session, customer, gardening, sc, 2.0, center=ctr_a)
+    _link_service(db_session, customer, gardening, sc, 2.0, center=ctr_b)
+    _link_service(db_session, customer, gardening, sc, 2.0, center=ctr_c)
+    _link_fixed_service(db_session, customer, fee, quantity=1, rate=999.0, center=ctr_a)
+
+    qbo = FakeQBO()
+    csv_bytes = _make_raw_csv(
+        [("PARA", {"Gardening": 5}), ("PARB", {"Gardening": 7}), ("PARC", {"Gardening": 3})],
+        ["Gardening"],
+    )
+    result = generate_invoices(db_session, qbo, "tok", "realm", "f.csv", csv_bytes)
+
+    assert result.invoices_created == 2
+    has_fixed = [
+        any(l["SalesItemLineDetail"]["ItemRef"]["value"] == "qbo-partner3-fee" for l in inv["Line"])
+        for inv in qbo.invoices
+    ]
+    assert has_fixed.count(True) == 1
+
+
+# ── Input pricing (quantity typed in at Validate time) ─────────────────────────
+
+def test_input_service_uses_supplied_quantity(db_session):
+    sc = _make_service_code(db_session, "B0017")
+    customer = _make_customer(db_session, "Input Co", qbo_id="qbo-input1", email="i1@i1.com")
+    _make_center(db_session, customer.id, "PAR")
+    gardening = _make_product(db_session, "Gardening", "qbo-input1-g")
+    consulting = _make_product(db_session, "Consulting services B0006", "qbo-input1-c")
+    _link_service(db_session, customer, gardening, sc, 2.0)
+    input_cps = _link_input_service(db_session, customer, consulting, rate=150.0, description="Preread")
+
+    qbo = FakeQBO()
+    csv_bytes = _make_raw_csv([("PAR", {"Gardening": 5})], ["Gardening"])
+    result = generate_invoices(
+        db_session, qbo, "tok", "realm", "f.csv", csv_bytes,
+        input_quantities={input_cps.id: Decimal("3")},
+    )
+
+    assert result.invoices_created == 1
+    lines = qbo.invoices[0]["Line"]
+    assert len(lines) == 2
+    input_line = next(l for l in lines if l["SalesItemLineDetail"]["ItemRef"]["value"] == "qbo-input1-c")
+    assert input_line["SalesItemLineDetail"]["Qty"] == 3.0
+    assert input_line["SalesItemLineDetail"]["UnitPrice"] == 150.0
+    assert input_line["Amount"] == pytest.approx(450.0)
+    assert input_line["Description"] == f"Preread for {_last_month_label()}"
+
+
+def test_input_service_with_no_supplied_quantity_produces_no_line(db_session):
+    """No input_quantities entry (or a non-positive one) — skipped, same as
+    an unmapped flat/slab column, never guessed."""
+    sc = _make_service_code(db_session, "B0018")
+    customer = _make_customer(db_session, "Input No Qty Co", qbo_id="qbo-input2", email="i2@i2.com")
+    _make_center(db_session, customer.id, "PAR")
+    gardening = _make_product(db_session, "Gardening", "qbo-input2-g")
+    consulting = _make_product(db_session, "Consulting services B0006", "qbo-input2-c")
+    _link_service(db_session, customer, gardening, sc, 2.0)
+    _link_input_service(db_session, customer, consulting, rate=150.0)
+
+    qbo = FakeQBO()
+    csv_bytes = _make_raw_csv([("PAR", {"Gardening": 5})], ["Gardening"])
+    result = generate_invoices(db_session, qbo, "tok", "realm", "f.csv", csv_bytes)
+
+    assert result.invoices_created == 1
+    assert len(qbo.invoices[0]["Line"]) == 1  # only Gardening
+
+
+def test_validation_reports_input_requirement_until_satisfied(db_session):
+    from app.schemas.invoice_validation import InputQuantityEntry, RevalidateRequest, ValidatedRow
+    from app.services.invoice_validation import revalidate
+
+    sc = _make_service_code(db_session, "B0019")
+    customer = _make_customer(db_session, "Input Req Co", qbo_id="qbo-input3", email="i3@i3.com")
+    _make_center(db_session, customer.id, "PAR")
+    gardening = _make_product(db_session, "Gardening", "qbo-input3-g")
+    consulting = _make_product(db_session, "Consulting services B0006", "qbo-input3-c")
+    _link_service(db_session, customer, gardening, sc, 2.0)
+    input_cps = _link_input_service(db_session, customer, consulting, rate=150.0)
+
+    rows = [ValidatedRow(row_index=0, center_id="PAR", center_name="X", center_prefix="PAR", metrics={"Gardening": 5}, matched=True)]
+
+    unsatisfied = revalidate(RevalidateRequest(metric_columns=["Gardening"], rows=rows), db_session)
+    assert unsatisfied.has_errors is False
+    assert len(unsatisfied.input_requirements) == 1
+    assert unsatisfied.input_requirements[0].customer_product_and_service_id == input_cps.id
+
+    satisfied = revalidate(
+        RevalidateRequest(
+            metric_columns=["Gardening"], rows=rows,
+            input_quantities=[InputQuantityEntry(customer_product_and_service_id=input_cps.id, quantity=Decimal("2"))],
+        ),
+        db_session,
+    )
+    assert satisfied.input_requirements == []
+
+
 # ── Drive attachment ───────────────────────────────────────────────────────────
 
-def _fake_drive_folder(monkeypatch, files: dict[str, dict]):
-    """files: {center_name_lower: {"id": ..., "name": ..., "mimeType": ...}}"""
+def test_match_exact_filenames_requires_exact_name_including_extension(monkeypatch):
+    """Exact, case-insensitive match — a same-stem file with a different
+    extension does not count, unlike the old fuzzy stem-based matcher."""
+    files = [
+        {"id": "1", "name": "PAR.xlsx", "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"},
+        {"id": "2", "name": "PAR.pdf", "mimeType": "application/pdf"},
+    ]
+    monkeypatch.setattr(gdrive_client, "list_folder_files", lambda folder_id: files)
+
+    matched = gdrive_client.match_exact_filenames("folder-id", ["par.xlsx"])
+
+    assert set(matched.keys()) == {"par.xlsx"}
+    assert matched["par.xlsx"]["id"] == "1"
+
+
+def _fake_drive_folder(monkeypatch, files_by_exact_name: dict[str, dict]):
+    """files_by_exact_name: {filename_lower: {"id": ..., "name": ..., "mimeType": ...}}
+    — exact filename match, mirroring gdrive_client.match_exact_filenames."""
     monkeypatch.setattr(gdrive_client, "extract_folder_id", lambda url: "fake-folder-id")
-    monkeypatch.setattr(gdrive_client, "match_center_files", lambda folder_id: files)
+    monkeypatch.setattr(
+        gdrive_client, "match_exact_filenames",
+        lambda folder_id, wanted: {
+            k: v for k, v in files_by_exact_name.items() if k in {w.strip().lower() for w in wanted}
+        },
+    )
     monkeypatch.setattr(
         gdrive_client, "download_file",
         lambda file_id, mime_type: (b"fake xlsx bytes", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
@@ -1071,10 +1284,10 @@ def _fake_drive_folder(monkeypatch, files: dict[str, dict]):
 def test_drive_attachment_matched_center(db_session, monkeypatch):
     sc = _make_service_code(db_session, "SC-DRV1")
     customer = _make_customer(db_session, "Drive Co", qbo_id="qbo-drive1", email="d1@d1.com", add_attachment_in_mail=True)
-    _make_center(db_session, customer.id, "PAR")
+    _make_center(db_session, customer.id, "PAR", drive_file_names="PAR.xlsx")
     ps = _make_product(db_session, "Gardening", "qbo-drive-g1")
     _link_service(db_session, customer, ps, sc, 5.0)
-    _fake_drive_folder(monkeypatch, {"par": {"id": "file-1", "name": "PAR.xlsx", "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}})
+    _fake_drive_folder(monkeypatch, {"par.xlsx": {"id": "file-1", "name": "PAR.xlsx", "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}})
 
     qbo = FakeQBO()
     csv_bytes = _make_raw_csv([("PAR", {"Gardening": 3})], ["Gardening"])
@@ -1087,13 +1300,35 @@ def test_drive_attachment_matched_center(db_session, monkeypatch):
     assert att["invoice_id"] == qbo.invoices[0]["Id"]
 
 
+def test_drive_attachment_multiple_filenames_for_one_center(db_session, monkeypatch):
+    """A centre can list more than one Drive file name, comma-separated —
+    every configured one that's found gets attached."""
+    sc = _make_service_code(db_session, "SC-DRV6")
+    customer = _make_customer(db_session, "Multi File Co", qbo_id="qbo-drive6", email="d6@d6.com", add_attachment_in_mail=True)
+    _make_center(db_session, customer.id, "PAR", drive_file_names="PAR.xlsx, PAR-Extra.xls")
+    ps = _make_product(db_session, "Gardening", "qbo-drive-g6")
+    _link_service(db_session, customer, ps, sc, 5.0)
+    _fake_drive_folder(monkeypatch, {
+        "par.xlsx": {"id": "file-1", "name": "PAR.xlsx", "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"},
+        "par-extra.xls": {"id": "file-2", "name": "PAR-Extra.xls", "mimeType": "application/vnd.ms-excel"},
+    })
+
+    qbo = FakeQBO()
+    csv_bytes = _make_raw_csv([("PAR", {"Gardening": 3})], ["Gardening"])
+    result = generate_invoices(db_session, qbo, "tok", "realm", "f.csv", csv_bytes, drive_folder_url="https://drive.google.com/drive/folders/anything")
+
+    assert result.invoices_created == 1
+    assert len(qbo.attachments) == 2
+    assert {a["filename"] for a in qbo.attachments} == {"PAR.xlsx", "PAR-Extra.xls"}
+
+
 def test_drive_attachment_no_match_warns_but_invoice_still_created(db_session, monkeypatch):
     sc = _make_service_code(db_session, "SC-DRV2")
     customer = _make_customer(db_session, "Drive No Match Co", qbo_id="qbo-drive2", email="d2@d2.com", add_attachment_in_mail=True)
-    _make_center(db_session, customer.id, "PAR")
+    _make_center(db_session, customer.id, "PAR", drive_file_names="PAR.xlsx")
     ps = _make_product(db_session, "Gardening", "qbo-drive-g2")
     _link_service(db_session, customer, ps, sc, 5.0)
-    _fake_drive_folder(monkeypatch, {})  # folder has no file matching "par"
+    _fake_drive_folder(monkeypatch, {})  # folder has no file named "PAR.xlsx"
 
     qbo = FakeQBO()
     csv_bytes = _make_raw_csv([("PAR", {"Gardening": 3})], ["Gardening"])
@@ -1101,20 +1336,20 @@ def test_drive_attachment_no_match_warns_but_invoice_still_created(db_session, m
 
     assert result.invoices_created == 1
     assert len(qbo.attachments) == 0
-    assert any("no matching Drive file" in e for e in result.errors)
+    assert any("not found" in e for e in result.errors)
 
 
 def test_drive_attachment_grouped_invoice_attaches_every_matched_center(db_session, monkeypatch):
     sc = _make_service_code(db_session, "SC-DRV3")
     customer = _make_customer(db_session, "Drive Grouped Co", qbo_id="qbo-drive3", email="d3@d3.com", add_attachment_in_mail=True)
-    ctr_a = _make_center(db_session, customer.id, "grp-a")
-    ctr_b = _make_center(db_session, customer.id, "grp-b")
+    ctr_a = _make_center(db_session, customer.id, "grp-a", drive_file_names="GRP-A.xlsx")
+    ctr_b = _make_center(db_session, customer.id, "grp-b", drive_file_names="GRP-B.xlsx")
     _make_grouping(db_session, customer.id, [ctr_a, ctr_b])
     ps = _make_product(db_session, "Gardening", "qbo-drive-g3")
     _link_service(db_session, customer, ps, sc, 2.0)
     _fake_drive_folder(monkeypatch, {
-        "grp-a": {"id": "file-a", "name": "GRP-A.xlsx", "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"},
-        "grp-b": {"id": "file-b", "name": "GRP-B.xlsx", "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"},
+        "grp-a.xlsx": {"id": "file-a", "name": "GRP-A.xlsx", "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"},
+        "grp-b.xlsx": {"id": "file-b", "name": "GRP-B.xlsx", "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"},
     })
 
     qbo = FakeQBO()
@@ -1148,15 +1383,36 @@ def test_no_drive_folder_url_skips_attachment_entirely(db_session, monkeypatch):
     assert len(qbo.attachments) == 0
 
 
-def test_drive_attachment_skipped_when_customer_opted_out(db_session, monkeypatch):
-    """add_attachment_in_mail=False (the default) means Drive is never even
-    consulted for that customer, even with a real matching file waiting."""
+def test_drive_attachment_matched_regardless_of_add_attachment_in_mail_flag(db_session, monkeypatch):
+    """The attachment check is driven purely by whether the centre has a
+    Drive file name configured — add_attachment_in_mail plays no part in it,
+    even when it's False (the default)."""
     sc = _make_service_code(db_session, "SC-DRV5")
     customer = _make_customer(db_session, "Opted Out Co", qbo_id="qbo-drive5", email="d5@d5.com", add_attachment_in_mail=False)
-    _make_center(db_session, customer.id, "PAR")
+    _make_center(db_session, customer.id, "PAR", drive_file_names="PAR.xlsx")
     ps = _make_product(db_session, "Gardening", "qbo-drive-g5")
     _link_service(db_session, customer, ps, sc, 5.0)
-    _fake_drive_folder(monkeypatch, {"par": {"id": "file-1", "name": "PAR.xlsx", "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}})
+    _fake_drive_folder(monkeypatch, {"par.xlsx": {"id": "file-1", "name": "PAR.xlsx", "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}})
+
+    qbo = FakeQBO()
+    csv_bytes = _make_raw_csv([("PAR", {"Gardening": 3})], ["Gardening"])
+    result = generate_invoices(db_session, qbo, "tok", "realm", "f.csv", csv_bytes, drive_folder_url="https://drive.google.com/drive/folders/anything")
+
+    assert result.invoices_created == 1
+    assert len(qbo.attachments) == 1
+    assert qbo.attachments[0]["filename"] == "PAR.xlsx"
+
+
+def test_center_without_drive_file_name_never_checked(db_session, monkeypatch):
+    """A centre with no Drive file name configured is skipped entirely — no
+    attachment is attempted and no warning is raised, even though the
+    folder has files sitting in it and the customer opted into attachments."""
+    sc = _make_service_code(db_session, "SC-DRV7")
+    customer = _make_customer(db_session, "No Filename Co", qbo_id="qbo-drive7", email="d7@d7.com", add_attachment_in_mail=True)
+    _make_center(db_session, customer.id, "PAR")
+    ps = _make_product(db_session, "Gardening", "qbo-drive-g7")
+    _link_service(db_session, customer, ps, sc, 5.0)
+    _fake_drive_folder(monkeypatch, {"unrelated.xlsx": {"id": "file-1", "name": "unrelated.xlsx", "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}})
 
     qbo = FakeQBO()
     csv_bytes = _make_raw_csv([("PAR", {"Gardening": 3})], ["Gardening"])
@@ -1164,53 +1420,87 @@ def test_drive_attachment_skipped_when_customer_opted_out(db_session, monkeypatc
 
     assert result.invoices_created == 1
     assert len(qbo.attachments) == 0
-    assert not any("Drive" in e for e in result.errors)  # not required, so no warning either
+    assert not any("Drive" in e for e in result.errors)
 
 
-# ── Pre-flight Drive attachment check (Preview stage) ─────────────────────────
+# ── Blocking Drive-attachment check at Validate time ───────────────────────────
 
-def test_check_drive_attachments_warns_when_required_and_missing(db_session, monkeypatch):
-    from app.schemas.invoice_validation import ValidatedRow
-    from app.services.invoice_validation import check_drive_attachments
+def test_validate_blocks_when_attachment_required_and_missing(db_session, monkeypatch):
+    from app.schemas.invoice_validation import RevalidateRequest, ValidatedRow
+    from app.services.invoice_validation import revalidate
 
+    sc = _make_service_code(db_session, "SC-PF1")
     customer = _make_customer(db_session, "Pre-flight Co", qbo_id="qbo-pf1", email="pf1@pf1.com", add_attachment_in_mail=True)
-    _make_center(db_session, customer.id, "PAR")
+    _make_center(db_session, customer.id, "PAR", drive_file_names="PAR.xlsx")
+    ps = _make_product(db_session, "Gardening", "qbo-pf1-g")
+    _link_service(db_session, customer, ps, sc, 5.0)
     _fake_drive_folder(monkeypatch, {})  # no files at all
 
     rows = [ValidatedRow(row_index=0, center_id="PAR", center_name="X", center_prefix="PAR", metrics={}, matched=True)]
-    warnings = check_drive_attachments(rows, "https://drive.google.com/drive/folders/anything", db_session)
+    body = RevalidateRequest(metric_columns=["Gardening"], rows=rows, drive_folder_url="https://drive.google.com/drive/folders/anything")
+    res = revalidate(body, db_session)
 
-    assert len(warnings) == 1
-    assert "Pre-flight Co" in warnings[0]
-    assert "PAR" in warnings[0]
+    assert res.has_errors is True
+    errs = next(ce.errors for ce in res.customer_errors if ce.customer_display_name == "Pre-flight Co")
+    assert any("PAR.xlsx" in e for e in errs)
 
 
-def test_check_drive_attachments_no_warning_when_not_required(db_session, monkeypatch):
-    from app.schemas.invoice_validation import ValidatedRow
-    from app.services.invoice_validation import check_drive_attachments
+def test_validate_no_error_when_attachment_not_required(db_session, monkeypatch):
+    from app.schemas.invoice_validation import RevalidateRequest, ValidatedRow
+    from app.services.invoice_validation import revalidate
 
-    customer = _make_customer(db_session, "No Opt-in Co", qbo_id="qbo-pf2", email="pf2@pf2.com", add_attachment_in_mail=False)
+    sc = _make_service_code(db_session, "SC-PF2")
+    # add_attachment_in_mail=True on purpose — proves the check is skipped
+    # because the centre has no Drive file name configured, not because of
+    # this flag.
+    customer = _make_customer(db_session, "No Opt-in Co", qbo_id="qbo-pf2", email="pf2@pf2.com", add_attachment_in_mail=True)
     _make_center(db_session, customer.id, "PAR")
-    _fake_drive_folder(monkeypatch, {})  # no files at all — but doesn't matter, not required
+    ps = _make_product(db_session, "Gardening", "qbo-pf2-g")
+    _link_service(db_session, customer, ps, sc, 5.0)
+    _fake_drive_folder(monkeypatch, {})  # no files at all — doesn't matter, not required
 
     rows = [ValidatedRow(row_index=0, center_id="PAR", center_name="X", center_prefix="PAR", metrics={}, matched=True)]
-    warnings = check_drive_attachments(rows, "https://drive.google.com/drive/folders/anything", db_session)
+    body = RevalidateRequest(metric_columns=["Gardening"], rows=rows, drive_folder_url="https://drive.google.com/drive/folders/anything")
+    res = revalidate(body, db_session)
 
-    assert warnings == []
+    assert res.has_errors is False
 
 
-def test_check_drive_attachments_no_warning_when_matched(db_session, monkeypatch):
-    from app.schemas.invoice_validation import ValidatedRow
-    from app.services.invoice_validation import check_drive_attachments
+def test_validate_no_error_when_attachment_matched(db_session, monkeypatch):
+    from app.schemas.invoice_validation import RevalidateRequest, ValidatedRow
+    from app.services.invoice_validation import revalidate
 
+    sc = _make_service_code(db_session, "SC-PF3")
     customer = _make_customer(db_session, "Matched Co", qbo_id="qbo-pf3", email="pf3@pf3.com", add_attachment_in_mail=True)
-    _make_center(db_session, customer.id, "PAR")
-    _fake_drive_folder(monkeypatch, {"par": {"id": "file-1", "name": "PAR.xlsx", "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}})
+    _make_center(db_session, customer.id, "PAR", drive_file_names="PAR.xlsx")
+    ps = _make_product(db_session, "Gardening", "qbo-pf3-g")
+    _link_service(db_session, customer, ps, sc, 5.0)
+    _fake_drive_folder(monkeypatch, {"par.xlsx": {"id": "file-1", "name": "PAR.xlsx", "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}})
 
     rows = [ValidatedRow(row_index=0, center_id="PAR", center_name="X", center_prefix="PAR", metrics={}, matched=True)]
-    warnings = check_drive_attachments(rows, "https://drive.google.com/drive/folders/anything", db_session)
+    body = RevalidateRequest(metric_columns=["Gardening"], rows=rows, drive_folder_url="https://drive.google.com/drive/folders/anything")
+    res = revalidate(body, db_session)
 
-    assert warnings == []
+    assert res.has_errors is False
+
+
+def test_validate_blocks_when_attachment_required_and_no_folder_link(db_session):
+    from app.schemas.invoice_validation import RevalidateRequest, ValidatedRow
+    from app.services.invoice_validation import revalidate
+
+    sc = _make_service_code(db_session, "SC-PF4")
+    customer = _make_customer(db_session, "No Link Co", qbo_id="qbo-pf4", email="pf4@pf4.com", add_attachment_in_mail=True)
+    _make_center(db_session, customer.id, "PAR", drive_file_names="PAR.xlsx")
+    ps = _make_product(db_session, "Gardening", "qbo-pf4-g")
+    _link_service(db_session, customer, ps, sc, 5.0)
+
+    rows = [ValidatedRow(row_index=0, center_id="PAR", center_name="X", center_prefix="PAR", metrics={}, matched=True)]
+    body = RevalidateRequest(metric_columns=["Gardening"], rows=rows, drive_folder_url=None)
+    res = revalidate(body, db_session)
+
+    assert res.has_errors is True
+    errs = next(ce.errors for ce in res.customer_errors if ce.customer_display_name == "No Link Co")
+    assert any("no Drive folder link" in e for e in errs)
 
 
 # ── Per-customer payment terms (invoice due date) ─────────────────────────────

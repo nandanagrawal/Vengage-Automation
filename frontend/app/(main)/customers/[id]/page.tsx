@@ -55,6 +55,8 @@ function slabRangeLabel(start: number, end: number | null) {
 function ServiceRow({ svc }: { svc: CustomerServiceRow }) {
   const isSlab = svc.pricing_type === "slab";
   const isFixed = svc.pricing_type === "fixed";
+  const isInput = svc.pricing_type === "input";
+  const badgeLabel = isSlab ? "Slab" : isFixed ? "Fixed" : isInput ? "Input" : "Flat";
   return (
     <div style={{
       padding: "10px 14px", borderRadius: 8,
@@ -62,18 +64,18 @@ function ServiceRow({ svc }: { svc: CustomerServiceRow }) {
     }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
         <div style={{ minWidth: 0 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
             <span style={{ fontSize: 13, fontWeight: 600, color: "var(--text-1)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
               {svc.name ?? `Product #${svc.product_and_service_id}`}
             </span>
             <span style={{
               flexShrink: 0, fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.4,
-              color: isSlab || isFixed ? "var(--primary)" : "var(--text-3)",
-              background: isSlab || isFixed ? "var(--primary-bg)" : "var(--surface-2)",
+              color: isSlab || isFixed || isInput ? "var(--primary)" : "var(--text-3)",
+              background: isSlab || isFixed || isInput ? "var(--primary-bg)" : "var(--surface-2)",
               border: "1px solid var(--border)",
               padding: "1px 6px", borderRadius: 5,
             }}>
-              {isSlab ? "Slab" : isFixed ? "Fixed" : "Flat"}
+              {badgeLabel}
             </span>
             {svc.column_header && (
               <span style={{
@@ -82,6 +84,15 @@ function ServiceRow({ svc }: { svc: CustomerServiceRow }) {
                 padding: "1px 6px", borderRadius: 5, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
               }}>
                 col: {svc.column_header}
+              </span>
+            )}
+            {svc.center_name && (
+              <span style={{
+                flexShrink: 0, fontSize: 10, color: "var(--text-3)",
+                background: "var(--surface-2)", border: "1px solid var(--border)",
+                padding: "1px 6px", borderRadius: 5, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+              }}>
+                centre: {svc.center_name}
               </span>
             )}
           </div>
@@ -98,6 +109,7 @@ function ServiceRow({ svc }: { svc: CustomerServiceRow }) {
             padding: "2px 9px", borderRadius: 6,
           }}>
             {isFixed && svc.quantity != null ? `${parseFloat(String(svc.quantity))} × ` : ""}
+            {isInput ? "input × " : ""}
             ${svc.rate != null ? Number(svc.rate).toFixed(3) : "—"}
           </span>
         )}
@@ -195,6 +207,7 @@ export default function CustomerDetailPage() {
             <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold border ${ss.cls}`}>{ss.label}</span>
           </div>
           <InfoField label="QBO ID" value={customer.qbo_id} />
+          <InfoField label="Customer Category" value={customer.category === "partner" ? "Partner" : "Direct Customer"} />
         </InfoSection>
 
         <InfoSection title="Contact">

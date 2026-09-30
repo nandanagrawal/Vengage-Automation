@@ -809,25 +809,6 @@ def generate_invoices_from_parsed(
         result.errors.append("No centers in the file matched any center in the database.")
         return result
 
-    # Resolve the Drive folder once for the whole run (not per-invoice) — a
-    # bad link/no access is reported but never blocks invoice creation. By
-    # generation time this has already passed the blocking Validate-stage
-    # check for any customer that requires an attachment, so a miss here is
-    # unexpected (the folder changed between Validate and Generate) rather
-    # than the normal case.
-    drive_files: dict[str, dict] | None = None
-    if drive_folder_url:
-        try:
-            folder_id = gdrive_client.extract_folder_id(drive_folder_url)
-            wanted_filenames = [
-                name
-                for n in matched_names
-                for name in center_by_name[n].drive_file_name_list()
-            ]
-            drive_files = gdrive_client.match_exact_filenames(folder_id, wanted_filenames)
-        except Exception as e:  # noqa: BLE001 — Drive access issues must not block generation
-            result.errors.append(f"Could not read Drive folder for attachments: {e}")
-
     customer_ids: set[int] = {center_by_name[n].company_id for n in matched_names}
     customers: list[Customer] = (
         db.query(Customer)
@@ -845,6 +826,27 @@ def generate_invoices_from_parsed(
         .all()
     )
     customer_by_id: dict[int, Customer] = {c.id: c for c in customers}
+
+    # Resolve the Drive folder once for the whole run (not per-invoice) — a
+    # bad link/no access is reported but never blocks invoice creation. By
+    # generation time this has already passed the blocking Validate-stage
+    # check for any customer that requires an attachment, so a miss here is
+    # unexpected (the folder changed between Validate and Generate) rather
+    # than the normal case. Only centres whose customer has Mail attachment
+    # on are looked up at all — Drive is never even queried for the rest.
+    drive_files: dict[str, dict] | None = None
+    if drive_folder_url:
+        try:
+            folder_id = gdrive_client.extract_folder_id(drive_folder_url)
+            wanted_filenames = [
+                name
+                for n in matched_names
+                if customer_by_id[center_by_name[n].company_id].add_attachment_in_mail
+                for name in center_by_name[n].drive_file_name_list()
+            ]
+            drive_files = gdrive_client.match_exact_filenames(folder_id, wanted_filenames)
+        except Exception as e:  # noqa: BLE001 — Drive access issues must not block generation
+            result.errors.append(f"Could not read Drive folder for attachments: {e}")
 
     invoices: list[Invoice] = (
         db.query(Invoice)
@@ -1059,7 +1061,7 @@ def _create_and_send(
         inv_id = str(qbo_inv.get("Id", ""))
         inv_number: str | None = qbo_inv.get("DocNumber") or None
 
-        if drive_files is not None and inv_id:
+        if drive_files is not None and inv_id and customer.add_attachment_in_mail:
             _attach_center_files(
                 qbo=qbo, access_token=access_token, realm_id=realm_id,
                 inv_id=inv_id, customer_name=customer.display_name,

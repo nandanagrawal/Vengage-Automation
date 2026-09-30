@@ -1406,10 +1406,10 @@ def test_no_drive_folder_url_skips_attachment_entirely(db_session, monkeypatch):
     assert len(qbo.attachments) == 0
 
 
-def test_drive_attachment_matched_regardless_of_add_attachment_in_mail_flag(db_session, monkeypatch):
-    """The attachment check is driven purely by whether the centre has a
-    Drive file name configured — add_attachment_in_mail plays no part in it,
-    even when it's False (the default)."""
+def test_drive_attachment_skipped_when_customer_opted_out(db_session, monkeypatch):
+    """Mail attachment off suppresses Drive lookup entirely for that
+    customer, even when a centre still has a Drive file name configured —
+    both add_attachment_in_mail AND the centre's file name must be set."""
     sc = _make_service_code(db_session, "SC-DRV5")
     customer = _make_customer(db_session, "Opted Out Co", qbo_id="qbo-drive5", email="d5@d5.com", add_attachment_in_mail=False)
     _make_center(db_session, customer.id, "PAR", drive_file_names="PAR.xlsx")
@@ -1422,8 +1422,8 @@ def test_drive_attachment_matched_regardless_of_add_attachment_in_mail_flag(db_s
     result = generate_invoices(db_session, qbo, "tok", "realm", "f.csv", csv_bytes, drive_folder_url="https://drive.google.com/drive/folders/anything")
 
     assert result.invoices_created == 1
-    assert len(qbo.attachments) == 1
-    assert qbo.attachments[0]["filename"] == "PAR.xlsx"
+    assert len(qbo.attachments) == 0
+    assert not any("Drive" in e for e in result.errors)  # not required, so no warning either
 
 
 def test_center_without_drive_file_name_never_checked(db_session, monkeypatch):
@@ -1473,9 +1473,9 @@ def test_validate_no_error_when_attachment_not_required(db_session, monkeypatch)
     from app.services.invoice_validation import revalidate
 
     sc = _make_service_code(db_session, "SC-PF2")
-    # add_attachment_in_mail=True on purpose — proves the check is skipped
-    # because the centre has no Drive file name configured, not because of
-    # this flag.
+    # add_attachment_in_mail=True on purpose — the centre having no Drive
+    # file name configured is enough on its own to skip the check, even
+    # with the flag on (both must be true for the check to apply at all).
     customer = _make_customer(db_session, "No Opt-in Co", qbo_id="qbo-pf2", email="pf2@pf2.com", add_attachment_in_mail=True)
     _make_center(db_session, customer.id, "PAR")
     ps = _make_product(db_session, "Gardening", "qbo-pf2-g")
@@ -1499,6 +1499,27 @@ def test_validate_no_error_when_attachment_matched(db_session, monkeypatch):
     ps = _make_product(db_session, "Gardening", "qbo-pf3-g")
     _link_service(db_session, customer, ps, sc, 5.0)
     _fake_drive_folder(monkeypatch, {"par.xlsx": {"id": "file-1", "name": "PAR.xlsx", "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}})
+
+    rows = [ValidatedRow(row_index=0, center_id="PAR", center_name="X", center_prefix="PAR", metrics={}, matched=True)]
+    body = RevalidateRequest(metric_columns=["Gardening"], rows=rows, drive_folder_url="https://drive.google.com/drive/folders/anything")
+    res = revalidate(body, db_session)
+
+    assert res.has_errors is False
+
+
+def test_validate_no_error_when_mail_attachment_off_even_with_centre_filename(db_session, monkeypatch):
+    """Mail attachment off suppresses the check entirely, even though the
+    centre has a Drive file name configured and the folder has no match for
+    it — the flag being off is enough on its own to skip the check."""
+    from app.schemas.invoice_validation import RevalidateRequest, ValidatedRow
+    from app.services.invoice_validation import revalidate
+
+    sc = _make_service_code(db_session, "SC-PF5")
+    customer = _make_customer(db_session, "Flag Off Co", qbo_id="qbo-pf5", email="pf5@pf5.com", add_attachment_in_mail=False)
+    _make_center(db_session, customer.id, "PAR", drive_file_names="PAR.xlsx")
+    ps = _make_product(db_session, "Gardening", "qbo-pf5-g")
+    _link_service(db_session, customer, ps, sc, 5.0)
+    _fake_drive_folder(monkeypatch, {})  # no files at all — doesn't matter, flag is off
 
     rows = [ValidatedRow(row_index=0, center_id="PAR", center_name="X", center_prefix="PAR", metrics={}, matched=True)]
     body = RevalidateRequest(metric_columns=["Gardening"], rows=rows, drive_folder_url="https://drive.google.com/drive/folders/anything")

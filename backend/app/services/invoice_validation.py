@@ -171,14 +171,15 @@ def _run_validation(
             ))
 
     # Drive attachment check — blocking, not the old Preview-stage warning.
-    # Driven purely by whether a matched centre has a Drive file name
-    # configured (Center.drive_file_name_list()), not by any customer-level
-    # flag: a centre with names configured must have every one of them in
-    # the Drive folder; a centre with none configured is skipped entirely.
+    # Requires BOTH: the customer has Mail attachment on, AND the centre has
+    # a Drive file name configured. Either one being off/blank means that
+    # centre is never looked up — Mail attachment off suppresses the check
+    # entirely for that customer, even if a centre still has a name set.
     customers_needing_drive = [
         cust
         for cust in customers
-        if any(ctr.drive_file_name_list() for ctr in centers_by_customer.get(cust.id, []))
+        if cust.add_attachment_in_mail
+        and any(ctr.drive_file_name_list() for ctr in centers_by_customer.get(cust.id, []))
     ]
     if customers_needing_drive:
         all_wanted: list[str] = [

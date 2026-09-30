@@ -150,8 +150,9 @@ function UploadStage({
           className="w-full rounded-lg bg-gray-50 border border-gray-200 px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-200"
         />
         <p className="text-[11px] text-gray-400 mt-1">
-          Required if any matched centre has a Drive file name configured — checked as part of validation below, not
-          just at the end. Each centre&apos;s configured Drive file name(s) get attached to its invoice in QuickBooks.
+          Required if any matched customer has Mail attachment on and a centre with a Drive file name configured —
+          checked as part of validation below, not just at the end. Each centre&apos;s configured Drive file name(s)
+          get attached to its invoice in QuickBooks.
         </p>
       </div>
       {error && <p className="text-red-600 text-sm rounded-lg border border-rose-500/30 bg-red-50 px-4 py-2.5">{error}</p>}

@@ -673,6 +673,7 @@ export function CustomerFormFields({ api, mode }: { api: CustomerFormApi; mode: 
           Add one or more centers for this company. They are saved with the customer and can be combined on invoices.
           The Drive file name(s) field is what&apos;s looked up in the Google Drive folder when attaching raw-data
           files to this centre&apos;s invoice — exact name(s), extension included, comma-separated if more than one.
+          Requires this customer&apos;s Mail attachment toggle (below) to be on as well — either one alone does nothing.
         </p>
         {centersLoadError && <p className="text-xs text-red-600 mb-2">{centersLoadError}</p>}
         <div className="space-y-2">

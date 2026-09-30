@@ -980,16 +980,23 @@ def _attach_center_files(
 ) -> None:
     """Attach every configured Drive file name for each center on this
     invoice — a centre can list more than one (Center.drive_file_name_list).
-    Never raises — a missing match or a download/attach failure is recorded
-    as a warning on `result` and the rest are still tried; the invoice itself
-    has already been created successfully by this point."""
+    If two centres on the same invoice share the exact same file name, it's
+    attached once, not once per centre. Never raises — a missing match or a
+    download/attach failure is recorded as a warning on `result` and the
+    rest are still tried; the invoice itself has already been created
+    successfully by this point."""
+    seen_filenames: set[str] = set()
     for name in center_names:
         ctr = center_by_name.get(name.strip().lower())
         wanted = ctr.drive_file_name_list() if ctr else []
         if not wanted:
             continue
         for filename in wanted:
-            f = drive_files.get(filename.strip().lower())
+            key = filename.strip().lower()
+            if key in seen_filenames:
+                continue
+            seen_filenames.add(key)
+            f = drive_files.get(key)
             if f is None:
                 result.errors.append(
                     f"Customer '{customer_name}' / {name}: Drive file '{filename}' not found — "

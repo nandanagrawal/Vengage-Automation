@@ -15,9 +15,15 @@ to, and can even be mapped twice for one customer against two columns.
 This script is the one-time bridge: for every CustomerProductAndService row
 that doesn't have a sheet_column_id yet, look up the OLD product_column_mappings
 table by product_and_service_id and copy its sheet_column_id across. It reads
-that table with raw SQL (not the ORM) because the ProductColumnMapping model
-is gone from the codebase — this script is meant to run BEFORE migration
-0017_drop_product_column_mapping removes the table for good.
+and writes customer_product_and_services with raw SQL throughout (never the
+ORM model) because it's meant to run right after migration 0016, before the
+schema has caught up to whatever the model looks like today — later columns
+such as center_id (added in 0019) don't exist yet at that point, and an ORM
+query always selects every column the current model declares, so it would
+fail with "column ... does not exist" the moment the model gains a column
+this script's target revision doesn't have. It's also meant to run BEFORE
+migration 0017_drop_product_column_mapping removes product_column_mappings
+for good.
 
 A row whose product never had a top-level mapping is left unresolved
 (sheet_column_id stays NULL) and listed at the end — exactly like today's
@@ -44,9 +50,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from sqlalchemy import text
 
-import app.models  # noqa: F401 — registers all models so SQLAlchemy can resolve relationships
 from app.db.session import SessionLocal
-from app.models.customer_product_and_service import CustomerProductAndService
 
 
 @dataclass
@@ -74,20 +78,26 @@ def _load_old_mappings(db) -> dict[int, tuple[int, str]]:
 def _discover(db) -> list[_Plan]:
     old_mappings = _load_old_mappings(db)
 
-    rows = (
-        db.query(CustomerProductAndService)
-        .filter(CustomerProductAndService.sheet_column_id.is_(None))
-        .all()
-    )
+    rows = db.execute(
+        text(
+            "SELECT cps.id, cps.product_and_service_id, "
+            "       COALESCE(cust.display_name, 'customer#' || cps.customer_id), "
+            "       COALESCE(ps.name, 'product#' || cps.product_and_service_id) "
+            "FROM customer_product_and_services cps "
+            "LEFT JOIN customers cust ON cust.id = cps.customer_id "
+            "LEFT JOIN product_and_services ps ON ps.id = cps.product_and_service_id "
+            "WHERE cps.sheet_column_id IS NULL"
+        )
+    ).fetchall()
 
     plans: list[_Plan] = []
-    for cps in rows:
-        mapping = old_mappings.get(cps.product_and_service_id)
+    for cps_id, product_and_service_id, customer_name, product_name in rows:
+        mapping = old_mappings.get(product_and_service_id)
         plans.append(
             _Plan(
-                cps_id=cps.id,
-                customer_name=cps.customer.display_name if cps.customer else f"customer#{cps.customer_id}",
-                product_name=cps.product_and_service.name if cps.product_and_service else f"product#{cps.product_and_service_id}",
+                cps_id=cps_id,
+                customer_name=customer_name,
+                product_name=product_name,
                 sheet_column_id=mapping[0] if mapping else None,
                 column_name=mapping[1] if mapping else None,
             )
@@ -118,12 +128,17 @@ def _apply(db, plans: list[_Plan]) -> None:
     applied = 0
     for p in [p for p in plans if p.sheet_column_id is not None]:
         try:
-            cps = db.query(CustomerProductAndService).filter(CustomerProductAndService.id == p.cps_id).first()
-            if cps is None or cps.sheet_column_id is not None:
-                continue  # already handled or gone
-            cps.sheet_column_id = p.sheet_column_id
+            result = db.execute(
+                text(
+                    "UPDATE customer_product_and_services "
+                    "SET sheet_column_id = :col_id "
+                    "WHERE id = :cps_id AND sheet_column_id IS NULL"
+                ),
+                {"col_id": p.sheet_column_id, "cps_id": p.cps_id},
+            )
             db.commit()
-            applied += 1
+            if result.rowcount:  # 0 = already handled or gone since discovery
+                applied += 1
         except Exception as e:  # noqa: BLE001 — report and keep going, one row must not block the rest
             db.rollback()
             print(f"ERROR applying {p.customer_name} / {p.product_name}: {e}")

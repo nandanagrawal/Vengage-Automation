@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { apiDelete, apiGet, apiPost, type SheetColumnRow } from "@/lib/api";
+import { apiDelete, apiGet, apiPatch, apiPost, type SheetColumnRow } from "@/lib/api";
 import { useAuth } from "@/lib/useAuth";
 import { ToastContainer, useToast } from "@/app/components/Toast";
 
@@ -14,6 +14,9 @@ export default function ProductMappingPage() {
   const [newName, setNewName] = useState("");
   const [adding, setAdding] = useState(false);
   const [deletingId, setDeletingId] = useState<number | null>(null);
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editingValue, setEditingValue] = useState("");
+  const [renaming, setRenaming] = useState(false);
 
   const load = useCallback(() => {
     apiGet<SheetColumnRow[]>("/sheet-columns")
@@ -54,6 +57,35 @@ export default function ProductMappingPage() {
     }
   };
 
+  const startEditing = (col: SheetColumnRow) => {
+    setEditingId(col.id);
+    setEditingValue(col.name);
+  };
+
+  const cancelEditing = () => {
+    setEditingId(null);
+    setEditingValue("");
+  };
+
+  const handleRename = async (col: SheetColumnRow) => {
+    const name = editingValue.trim();
+    if (!name || name === col.name) {
+      cancelEditing();
+      return;
+    }
+    setRenaming(true);
+    try {
+      await apiPatch(`/sheet-columns/${col.id}`, { name });
+      push(`Renamed "${col.name}" to "${name}"`, "success");
+      cancelEditing();
+      load();
+    } catch (err) {
+      push(err instanceof Error ? err.message : "Failed to rename column", "error");
+    } finally {
+      setRenaming(false);
+    }
+  };
+
   const handleDelete = async (col: SheetColumnRow) => {
     setDeletingId(col.id);
     try {
@@ -88,7 +120,8 @@ export default function ProductMappingPage() {
         <p className="text-gray-400 text-sm mt-1">
           The exact column headers from your RAW Data-Imaging sheet. Add them here, then pick one per
           service when editing a customer — each customer&apos;s service now chooses its own column, not
-          a shared product-wide setting.
+          a shared product-wide setting. Click a column&apos;s name to rename it — existing customer
+          mappings stay intact, but future imports must use the new header text.
         </p>
       </div>
 
@@ -130,7 +163,31 @@ export default function ProductMappingPage() {
                   key={c.id}
                   className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-gray-50 px-2.5 py-1 text-xs"
                 >
-                  <span style={{ color: "var(--text-2)" }}>{c.name}</span>
+                  {editingId === c.id ? (
+                    <input
+                      autoFocus
+                      className="input"
+                      style={{ fontSize: 13, padding: "1px 4px", height: 22, width: Math.max(80, editingValue.length * 7) }}
+                      value={editingValue}
+                      disabled={renaming}
+                      onChange={(e) => setEditingValue(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") { e.preventDefault(); void handleRename(c); }
+                        if (e.key === "Escape") { e.preventDefault(); cancelEditing(); }
+                      }}
+                      onBlur={() => void handleRename(c)}
+                    />
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => startEditing(c)}
+                      className="text-left hover:underline decoration-dotted underline-offset-2"
+                      style={{ color: "var(--text-2)" }}
+                      title="Click to rename"
+                    >
+                      {c.name}
+                    </button>
+                  )}
                   <button
                     type="button"
                     disabled={deletingId === c.id}

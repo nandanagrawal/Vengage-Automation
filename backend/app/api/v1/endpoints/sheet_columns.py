@@ -45,6 +45,35 @@ def create_sheet_column(
     return _to_response(row)
 
 
+@router.patch("/sheet-columns/{column_id}", response_model=SheetColumnResponse)
+def rename_sheet_column(
+    column_id: int,
+    body: SheetColumnInput,
+    db: Session = Depends(get_db),
+    _admin: User = Depends(require_admin),
+):
+    row = db.query(SheetColumn).filter(SheetColumn.id == column_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Column not found")
+
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(status_code=422, detail="name cannot be blank")
+
+    existing = (
+        db.query(SheetColumn)
+        .filter(SheetColumn.name == name, SheetColumn.id != column_id)
+        .first()
+    )
+    if existing:
+        raise HTTPException(status_code=409, detail="This column is already in the catalog")
+
+    row.name = name
+    db.commit()
+    db.refresh(row)
+    return _to_response(row)
+
+
 @router.delete("/sheet-columns/{column_id}", status_code=204)
 def delete_sheet_column(
     column_id: int,

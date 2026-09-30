@@ -222,6 +222,64 @@ def _sheet_column_id(admin_client, name: str) -> int:
     return r.json()["id"]
 
 
+def test_rename_sheet_column(admin_client):
+    col_id = _sheet_column_id(admin_client, "Old Header")
+    r = admin_client.patch(f"/api/v1/sheet-columns/{col_id}", json={"name": "New Header"})
+    assert r.status_code == 200, r.text
+    assert r.json() == {"id": col_id, "name": "New Header"}
+
+    listed = admin_client.get("/api/v1/sheet-columns").json()
+    assert {"id": col_id, "name": "New Header"} in listed
+    assert not any(c["name"] == "Old Header" for c in listed)
+
+
+def test_rename_sheet_column_keeps_existing_customer_mapping(admin_client, fake_qbo):
+    fake_qbo.items = [{"Id": "rn1", "Name": "Rename Product", "Type": "Service", "Active": True, "SyncToken": "0"}]
+    admin_client.post("/api/v1/sync/quickbooks")
+    pid = admin_client.get("/api/v1/product-and-services").json()[0]["id"]
+    col_id = _sheet_column_id(admin_client, "Header Before")
+
+    r = admin_client.post(
+        "/api/v1/customers",
+        json={**_BASE, "display_name": "Rename Mapping Co", "customer_services": [
+            {"product_and_service_id": pid, "sheet_column_id": col_id, "pricing_type": "flat", "rate": "10.00"}
+        ]},
+    )
+    assert r.status_code in (200, 201), r.text
+    customer_id = r.json()["id"]
+
+    rename = admin_client.patch(f"/api/v1/sheet-columns/{col_id}", json={"name": "Header After"})
+    assert rename.status_code == 200, rename.text
+
+    detail = admin_client.get(f"/api/v1/customers/{customer_id}").json()
+    svc = detail["customer_services"][0]
+    assert svc["sheet_column_id"] == col_id
+
+
+def test_rename_sheet_column_rejects_duplicate_name(admin_client):
+    _sheet_column_id(admin_client, "Taken Header")
+    col_id = _sheet_column_id(admin_client, "Other Header")
+    r = admin_client.patch(f"/api/v1/sheet-columns/{col_id}", json={"name": "Taken Header"})
+    assert r.status_code == 409
+
+
+def test_rename_sheet_column_blank_rejected(admin_client):
+    col_id = _sheet_column_id(admin_client, "Blank Target")
+    r = admin_client.patch(f"/api/v1/sheet-columns/{col_id}", json={"name": "   "})
+    assert r.status_code == 422
+
+
+def test_rename_sheet_column_404(admin_client):
+    r = admin_client.patch("/api/v1/sheet-columns/999999", json={"name": "Doesn't Matter"})
+    assert r.status_code == 404
+
+
+def test_rename_sheet_column_requires_admin(admin_client, supervisor_client):
+    col_id = _sheet_column_id(admin_client, "Perm Check Header")
+    r = supervisor_client.patch(f"/api/v1/sheet-columns/{col_id}", json={"name": "Should Not Apply"})
+    assert r.status_code == 403
+
+
 def test_customer_create_with_services(admin_client, db_session, fake_qbo):
     from app.models.service_code import ServiceCode
     sc = ServiceCode(code="TEST-SC", status=True)

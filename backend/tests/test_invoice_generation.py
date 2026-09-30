@@ -1363,6 +1363,29 @@ def test_drive_attachment_grouped_invoice_attaches_every_matched_center(db_sessi
     assert all(a["invoice_id"] == qbo.invoices[0]["Id"] for a in qbo.attachments)
 
 
+def test_drive_attachment_shared_filename_across_centers_attached_once(db_session, monkeypatch):
+    """Two centres on the same invoice configured with the exact same Drive
+    file name get it attached once, not once per centre."""
+    sc = _make_service_code(db_session, "SC-DRV8")
+    customer = _make_customer(db_session, "Shared File Co", qbo_id="qbo-drive8", email="d8@d8.com", add_attachment_in_mail=True)
+    ctr_a = _make_center(db_session, customer.id, "shr-a", drive_file_names="SHARED.xlsx")
+    ctr_b = _make_center(db_session, customer.id, "shr-b", drive_file_names="SHARED.xlsx")
+    _make_grouping(db_session, customer.id, [ctr_a, ctr_b])
+    ps = _make_product(db_session, "Gardening", "qbo-drive-g8")
+    _link_service(db_session, customer, ps, sc, 2.0)
+    _fake_drive_folder(monkeypatch, {
+        "shared.xlsx": {"id": "file-shared", "name": "SHARED.xlsx", "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"},
+    })
+
+    qbo = FakeQBO()
+    csv_bytes = _make_raw_csv([("shr-a", {"Gardening": 5}), ("shr-b", {"Gardening": 3})], ["Gardening"])
+    result = generate_invoices(db_session, qbo, "tok", "realm", "f.csv", csv_bytes, drive_folder_url="https://drive.google.com/drive/folders/anything")
+
+    assert result.invoices_created == 1
+    assert len(qbo.attachments) == 1
+    assert qbo.attachments[0]["filename"] == "SHARED.xlsx"
+
+
 def test_no_drive_folder_url_skips_attachment_entirely(db_session, monkeypatch):
     """Without drive_folder_url, gdrive_client is never touched at all."""
     monkeypatch.setattr(

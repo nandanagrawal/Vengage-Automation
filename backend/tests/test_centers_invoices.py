@@ -177,3 +177,35 @@ def test_supervisor_invoice_only_visible_for_own_customer(supervisor_client, adm
     rows = supervisor_client.get("/api/v1/invoices").json()
     assert len(rows) == 1
     assert rows[0]["company_id"] == sup_cid
+
+
+# ── drive_file_name_list() — comma is the separator, but a filename can ────────
+# ── contain one itself (e.g. a real Australian suburb name) ───────────────────
+
+def test_drive_file_name_list_splits_multiple_files():
+    c = Center(company_id=1, name="x", drive_file_names="PAR.xlsx, PAR-Extra.xls")
+    assert c.drive_file_name_list() == ["PAR.xlsx", "PAR-Extra.xls"]
+
+
+def test_drive_file_name_list_keeps_comma_inside_a_single_filename():
+    c = Center(company_id=1, name="x", drive_file_names="VNG-IMG-18-F-Matrix, Lalor.xlsx")
+    assert c.drive_file_name_list() == ["VNG-IMG-18-F-Matrix, Lalor.xlsx"]
+
+
+def test_drive_file_name_list_handles_comma_in_name_plus_a_second_file():
+    c = Center(
+        company_id=1, name="x",
+        drive_file_names="VNG-IMG-18-F-Matrix, Lalor.xlsx, Extra Report.xls",
+    )
+    assert c.drive_file_name_list() == ["VNG-IMG-18-F-Matrix, Lalor.xlsx", "Extra Report.xls"]
+
+
+def test_drive_file_name_list_no_space_after_comma():
+    c = Center(company_id=1, name="x", drive_file_names="Matrix, Lalor.xlsx,Extra.xls")
+    assert c.drive_file_name_list() == ["Matrix, Lalor.xlsx", "Extra.xls"]
+
+
+def test_drive_file_name_list_blank_and_none():
+    assert Center(company_id=1, name="x", drive_file_names=None).drive_file_name_list() == []
+    assert Center(company_id=1, name="x", drive_file_names="").drive_file_name_list() == []
+    assert Center(company_id=1, name="x", drive_file_names="   ").drive_file_name_list() == []

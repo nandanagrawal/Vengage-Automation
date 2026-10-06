@@ -27,8 +27,8 @@ function SortIcon({ active, dir }: { active: boolean; dir: SortDir }) {
   );
 }
 
-// Col layout: Customer | Email | Attach | Status | Actions
-const COLS = "grid-cols-[minmax(0,2fr)_minmax(0,1.5fr)_4.5rem_8rem_12rem]";
+// Col layout: Customer | Email | Centres | Attach | Status | Actions
+const COLS = "grid-cols-[minmax(0,2fr)_minmax(0,1.3fr)_minmax(0,1.6fr)_4.5rem_8rem_12rem]";
 
 export default function CustomersPage() {
   const { user } = useAuth();
@@ -139,6 +139,7 @@ export default function CustomersPage() {
   const headers: { label: string; key?: SortKey; align?: string }[] = [
     { label: "Customer", key: "display_name" },
     { label: "Email", key: "primary_email" },
+    { label: "Centres" },
     { label: "Attach", align: "text-center" },
     { label: "Status", key: "status", align: "text-center" },
     { label: "Actions", align: "text-center" },
@@ -247,6 +248,24 @@ export default function CustomersPage() {
 
                 {/* Email */}
                 <span className="text-gray-500 text-sm truncate pr-4">{c.primary_email ?? "—"}</span>
+
+                {/* Centres */}
+                <div className="flex flex-wrap items-center gap-1 pr-4" title={c.centers.map((ctr) => ctr.name).join(", ")}>
+                  {c.centers.length === 0 ? (
+                    <span className="text-gray-400 text-xs">—</span>
+                  ) : (
+                    <>
+                      {c.centers.slice(0, 3).map((ctr) => (
+                        <span key={ctr.id} className="inline-block max-w-[7rem] truncate px-1.5 py-0.5 rounded-md text-[10px] font-medium bg-sky-500/10 text-sky-700 border border-sky-200">
+                          {ctr.name}
+                        </span>
+                      ))}
+                      {c.centers.length > 3 && (
+                        <span className="text-[10px] font-medium text-gray-400">+{c.centers.length - 3}</span>
+                      )}
+                    </>
+                  )}
+                </div>
 
                 {/* Attach */}
                 <div className="flex justify-center">

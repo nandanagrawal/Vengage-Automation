@@ -6,8 +6,9 @@ relative order, after all listed ones; several rows of the same product
 (different columns / centres) also keep their current relative order.
 
 Usage (from backend/):
-    python scripts/set_service_order.py --database-url postgresql+psycopg2://...   # dry run
-    python scripts/set_service_order.py --database-url ... --apply
+    python scripts/set_service_order.py            # dry run, DB from app/core/config.py
+    python scripts/set_service_order.py --apply
+    python scripts/set_service_order.py --database-url postgresql+psycopg2://... --apply   # other DB
 """
 
 import argparse
@@ -20,6 +21,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import selectinload, sessionmaker
 
 import app.models  # noqa: F401
+from app.core.config import settings
 from app.models.customer import Customer
 from app.models.customer_product_and_service import CustomerProductAndService
 
@@ -40,10 +42,14 @@ SKU_ORDER = [
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--database-url", required=True)
+    parser.add_argument(
+        "--database-url", default=settings.DATABASE_URL,
+        help="Defaults to DATABASE_URL from app/core/config.py (or .env / environment).",
+    )
     parser.add_argument("--apply", action="store_true", help="Write the new order (default: dry run).")
     args = parser.parse_args()
 
+    print(f"Database: {args.database_url.rsplit('/', 1)[-1]}\n")
     rank = {name.strip().lower(): i for i, name in enumerate(SKU_ORDER)}
     db = sessionmaker(bind=create_engine(args.database_url))()
     try:

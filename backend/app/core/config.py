@@ -95,5 +95,13 @@ class Settings(BaseSettings):
     JWT_SECRET: str = _INSECURE_JWT_DEFAULT
     JWT_EXPIRE_MINUTES: int = 60 * 24 * 7  # 7 days
 
+    # Optional explicit Fernet key for TOTP-secret encryption (see
+    # app/services/totp_crypto.py). If not set, a stable key is derived
+    # from JWT_SECRET via HKDF-SHA256 — same pattern as
+    # QBO_TOKEN_ENCRYPTION_KEY above, but its own derived key.
+    TOTP_ENCRYPTION_KEY: str | None = None
+    # How long a "remember this device" cookie skips the 2FA challenge for.
+    TRUSTED_DEVICE_DAYS: int = 7
+
 
 settings = Settings()

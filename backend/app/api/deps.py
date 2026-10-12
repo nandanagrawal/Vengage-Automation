@@ -26,6 +26,12 @@ def get_current_user(
     except ValueError:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
 
+    # Rejects a 2fa_pending token (and any pre-2FA-rollout token, which
+    # predates this claim and so has none) — only a token issued after a
+    # completed 2FA check is a real access token.
+    if payload.get("typ") != "access":
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+
     user_id = int(payload.get("sub", 0))
     user = db.query(User).filter(User.id == user_id, User.is_active == True).first()  # noqa: E712
     if not user:

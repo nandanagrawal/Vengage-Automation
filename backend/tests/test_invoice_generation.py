@@ -1770,3 +1770,49 @@ def test_get_upload_list_endpoint(admin_client, db_session, admin_user):
     assert len(data) == 3
     assert data[0]["file_name"] == "file_2.csv"
     assert data[0]["total_invoices"] == 2
+
+
+def test_line_order_follows_service_position_across_centres(db_session):
+    """Invoice lines follow the customer's row order (position), product by
+    product across all centres on the invoice — not row creation order."""
+    sc = _make_service_code(db_session, "SC-ORD")
+    customer = _make_customer(db_session, "Order Co", qbo_id="qbo-ord", email="o@o.com")
+    ctr_a = _make_center(db_session, customer.id, "ord-a")
+    ctr_b = _make_center(db_session, customer.id, "ord-b")
+    _make_grouping(db_session, customer.id, [ctr_a, ctr_b])
+    ps_first = _make_product(db_session, "Gardening", "qbo-ord-g")
+    ps_second = _make_product(db_session, "Cleaning", "qbo-ord-c")
+    # Created Gardening-first, but positioned Cleaning-first.
+    g = _link_service(db_session, customer, ps_first, sc, 2.0)
+    c = _link_service(db_session, customer, ps_second, sc, 3.0)
+    g.position, c.position = 1, 0
+    db_session.commit()
+
+    qbo = FakeQBO()
+    csv_bytes = _make_raw_csv(
+        [("ord-a", {"Gardening": 1, "Cleaning": 1}), ("ord-b", {"Gardening": 1, "Cleaning": 1})],
+        ["Gardening", "Cleaning"],
+    )
+    generate_invoices(db_session, qbo, "tok", "realm", "f.csv", csv_bytes)
+
+    item_ids = [l["SalesItemLineDetail"]["ItemRef"]["value"] for l in qbo.invoices[0]["Line"]]
+    assert item_ids == ["qbo-ord-c", "qbo-ord-c", "qbo-ord-g", "qbo-ord-g"]
+
+
+def test_customer_services_saved_in_request_order(admin_client, db_session):
+    """PATCHing customer_services stores positions from the list order, and the
+    API returns rows in that order."""
+    customer = _make_customer(db_session, "Saved Order Co", qbo_id="qbo-so", email="s@s.com")
+    p1 = _make_product(db_session, "Gardening", "qbo-so-g")
+    p2 = _make_product(db_session, "Cleaning", "qbo-so-c")
+    col = _get_or_create_sheet_column(db_session, "Gardening").id
+
+    def svc(pid):
+        return {"product_and_service_id": pid, "sheet_column_id": col, "pricing_type": "flat", "rate": "1"}
+
+    r = admin_client.patch(f"/api/v1/customers/{customer.id}", json={"customer_services": [svc(p2.id), svc(p1.id)]})
+    assert r.status_code == 200, r.text
+    assert [s["product_and_service_id"] for s in r.json()["customer_services"]] == [p2.id, p1.id]
+
+    r = admin_client.patch(f"/api/v1/customers/{customer.id}", json={"customer_services": [svc(p1.id), svc(p2.id)]})
+    assert [s["product_and_service_id"] for s in r.json()["customer_services"]] == [p1.id, p2.id]

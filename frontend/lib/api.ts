@@ -79,7 +79,7 @@ export async function qboAuthGet<T>(path: string): Promise<T> {
     cache: "no-store",
     headers: authHeaders(),
   });
-  if (!r.ok) throw new Error((await r.text()) || r.statusText);
+  await assertOk(r);
   return r.json() as Promise<T>;
 }
 
@@ -89,7 +89,7 @@ export async function qboAuthDelete<T>(path: string): Promise<T> {
     method: "DELETE",
     headers: authHeaders(),
   });
-  if (!r.ok) throw new Error((await r.text()) || r.statusText);
+  await assertOk(r);
   if (r.status === 204 || r.headers.get("content-length") === "0") return {} as T;
   const text = await r.text();
   return text ? (JSON.parse(text) as T) : ({} as T);
@@ -551,12 +551,17 @@ export async function apiGetLineItemPreview(
   });
 }
 
-export type AuthToken = { access_token: string; token_type: string };
-
 export type CurrentUser = {
   id: number;
   email: string;
   full_name: string;
   role: "admin" | "supervisor";
   is_active: boolean;
+  totp_enabled: boolean;
 };
+
+export type BackupCodesResult = { backup_codes: string[] };
+
+export async function apiRegenerateBackupCodes(code: string): Promise<BackupCodesResult> {
+  return apiPost<BackupCodesResult>("/auth/2fa/backup-codes/regenerate", { code });
+}

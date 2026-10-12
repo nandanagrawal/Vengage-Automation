@@ -1,8 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { apiDelete, apiGet, apiPost, type CustomerRow, type SyncResult } from "@/lib/api";
 import { useAuth } from "@/lib/useAuth";
 
@@ -30,9 +30,10 @@ function SortIcon({ active, dir }: { active: boolean; dir: SortDir }) {
 // Col layout: Customer | Email | Centres | Attach | Status | Actions
 const COLS = "grid-cols-[minmax(0,2fr)_minmax(0,1.3fr)_minmax(0,1.6fr)_4.5rem_8rem_12rem]";
 
-export default function CustomersPage() {
+function CustomersPageContent() {
   const { user } = useAuth();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const isAdmin = user?.role === "admin";
 
   const [rows, setRows] = useState<CustomerRow[]>([]);
@@ -45,12 +46,20 @@ export default function CustomersPage() {
   const [deleteTarget, setDeleteTarget] = useState<CustomerRow | null>(null);
   const [deleting, setDeleting] = useState(false);
 
-  // Search / sort / page
-  const [search, setSearch] = useState("");
-  const [sortKey, setSortKey] = useState<SortKey>("display_name");
-  const [sortDir, setSortDir] = useState<SortDir>("asc");
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(10);
+  // Search / sort / page — restored from the URL so that clicking into a
+  // customer and pressing the browser back button lands back on the same
+  // search/sort/page instead of a reset list.
+  const [search, setSearch] = useState(() => searchParams.get("q") ?? "");
+  const [sortKey, setSortKey] = useState<SortKey>(() => {
+    const v = searchParams.get("sort");
+    return v === "primary_email" || v === "status" ? v : "display_name";
+  });
+  const [sortDir, setSortDir] = useState<SortDir>(() => (searchParams.get("dir") === "desc" ? "desc" : "asc"));
+  const [page, setPage] = useState(() => Math.max(1, Number(searchParams.get("page")) || 1));
+  const [pageSize, setPageSize] = useState(() => {
+    const v = Number(searchParams.get("pageSize"));
+    return PAGE_SIZES.includes(v) ? v : 10;
+  });
 
   const pendingCount = rows.filter((r) => r.status === "pending").length;
 
@@ -64,7 +73,27 @@ export default function CustomersPage() {
   }, []);
 
   useEffect(() => { void load(); }, [load]);
-  useEffect(() => { setPage(1); }, [search, sortKey, sortDir, pageSize]);
+
+  // Keep the URL in sync with search/sort/page so it survives a round trip
+  // through a customer's detail page and back.
+  useEffect(() => {
+    const params = new URLSearchParams();
+    if (search) params.set("q", search);
+    if (sortKey !== "display_name") params.set("sort", sortKey);
+    if (sortDir !== "asc") params.set("dir", sortDir);
+    if (page !== 1) params.set("page", String(page));
+    if (pageSize !== 10) params.set("pageSize", String(pageSize));
+    const qs = params.toString();
+    router.replace(qs ? `/customers?${qs}` : "/customers", { scroll: false });
+  }, [search, sortKey, sortDir, page, pageSize, router]);
+
+  // Reset to page 1 when a filter changes — but not on the initial mount,
+  // where `page` may have just been restored from the URL.
+  const didMount = useRef(false);
+  useEffect(() => {
+    if (!didMount.current) { didMount.current = true; return; }
+    setPage(1);
+  }, [search, sortKey, sortDir, pageSize]);
 
   const onSync = async () => {
     setSyncing(true);
@@ -385,5 +414,13 @@ export default function CustomersPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+export default function CustomersPage() {
+  return (
+    <Suspense fallback={<div className="max-w-7xl mx-auto py-16 text-center text-gray-400 text-sm animate-fadeInUp">Loading…</div>}>
+      <CustomersPageContent />
+    </Suspense>
   );
 }

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { apiPatch, apiPost } from "@/lib/api";
+import { apiPatch, apiPost, apiRegenerateBackupCodes } from "@/lib/api";
 import { useAuth } from "@/lib/useAuth";
 import { ToastContainer, useToast } from "@/app/components/Toast";
 
@@ -78,6 +78,26 @@ export default function SettingsPage() {
       push(err instanceof Error ? err.message : "Failed to change password", "error");
     } finally {
       setPasswordLoading(false);
+    }
+  };
+
+  // ── Two-factor authentication ───────────────────────────────────────────────
+  const [tfaCode, setTfaCode] = useState("");
+  const [tfaLoading, setTfaLoading] = useState(false);
+  const [newBackupCodes, setNewBackupCodes] = useState<string[] | null>(null);
+
+  const handleRegenerateBackupCodes = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setTfaLoading(true);
+    try {
+      const { backup_codes } = await apiRegenerateBackupCodes(tfaCode);
+      setNewBackupCodes(backup_codes);
+      setTfaCode("");
+      push("Backup codes regenerated — your old codes no longer work", "success");
+    } catch (err) {
+      push(err instanceof Error ? err.message : "Failed to regenerate backup codes", "error");
+    } finally {
+      setTfaLoading(false);
     }
   };
 
@@ -183,6 +203,67 @@ export default function SettingsPage() {
               </button>
             </div>
           </form>
+        </SectionCard>
+
+        {/* ── Two-factor authentication ─────────────────────────────────────── */}
+        <SectionCard title="Two-factor authentication" subtitle="Required on every account. Regenerate your backup codes if you've used or lost them.">
+          <FieldRow label="Status">
+            <div style={{ paddingTop: 8 }}>
+              <span className="badge badge-primary" style={{ fontSize: 11 }}>
+                {user?.totp_enabled ? "Enabled" : "—"}
+              </span>
+            </div>
+          </FieldRow>
+
+          {newBackupCodes ? (
+            <FieldRow label="New backup codes">
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                <p style={{ fontSize: 12, color: "var(--text-3)", margin: 0 }}>
+                  Save these now — they won&apos;t be shown again.
+                </p>
+                <div style={{
+                  display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8,
+                  padding: "14px 16px", background: "var(--bg-2)", borderRadius: 8,
+                }}>
+                  {newBackupCodes.map((c) => (
+                    <code key={c} style={{ fontSize: 14, letterSpacing: "0.5px" }}>{c}</code>
+                  ))}
+                </div>
+                <div>
+                  <button type="button" className="btn btn-secondary btn-sm" onClick={() => setNewBackupCodes(null)}>
+                    Done
+                  </button>
+                </div>
+              </div>
+            </FieldRow>
+          ) : (
+            <form onSubmit={(e) => void handleRegenerateBackupCodes(e)}>
+              <FieldRow label="Regenerate backup codes">
+                <input
+                  className="input"
+                  type="text"
+                  value={tfaCode}
+                  onChange={(e) => setTfaCode(e.target.value)}
+                  placeholder="Enter current 6-digit authenticator code"
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  style={{ width: "100%" }}
+                />
+                <p style={{ fontSize: 11, color: "var(--text-4)", marginTop: 5 }}>
+                  This replaces all 10 of your existing backup codes.
+                </p>
+              </FieldRow>
+              <div style={{ padding: "16px 0 8px", display: "flex", justifyContent: "flex-end" }}>
+                <button
+                  type="submit"
+                  className="btn btn-primary btn-sm"
+                  disabled={tfaLoading || tfaCode.length < 6}
+                >
+                  {tfaLoading ? "Regenerating…" : "Regenerate codes"}
+                </button>
+              </div>
+            </form>
+          )}
         </SectionCard>
 
       </div>

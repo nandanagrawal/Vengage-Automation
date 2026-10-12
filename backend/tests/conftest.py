@@ -121,6 +121,10 @@ class FakeQBO:
     def query_invoices(self, access_token: str, realm_id: str, start_position: int = 1, max_results: int = 1000) -> list:
         return []
 
+    def delete_invoice(self, access_token: str, realm_id: str, invoice_id: str, sync_token: str) -> dict:
+        self.invoices = [inv for inv in self.invoices if str(inv.get("Id")) != str(invoice_id)]
+        return {"Id": invoice_id, "status": "Deleted"}
+
     def attach_to_invoice(
         self, access_token: str, realm_id: str, invoice_id: str,
         filename: str, content_type: str, file_bytes: bytes,

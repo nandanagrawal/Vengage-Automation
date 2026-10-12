@@ -91,6 +91,14 @@ class SupportsQuickBooks(Protocol):
         max_results: int = 1000,
     ) -> list[dict[str, Any]]: ...
 
+    def delete_invoice(
+        self,
+        access_token: str,
+        realm_id: str,
+        invoice_id: str,
+        sync_token: str,
+    ) -> dict[str, Any]: ...
+
 
 def _headers(access_token: str) -> dict[str, str]:
     return {
@@ -162,6 +170,13 @@ class QuickBooksClient:
         if sync_token:
             body["SyncToken"] = sync_token
         sparse = os.getenv("QBO_CUSTOMER_SPARSE", "true").lower() in ("1", "true", "yes")
+        # QBO only honors sparse updates via this body field — the older
+        # "&sparse=true" query-string form (kept below too, harmless) is not
+        # actually enough on its own: without the body field, QBO treats the
+        # request as a full replace and rejects it for lacking a name field
+        # whenever the payload is a partial one (e.g. {"Active": False}).
+        if sparse:
+            body["sparse"] = True
         url = f"{self.base_url()}/v3/company/{realm_id}/customer?minorversion={self._minor()}"
         if sparse:
             url += "&sparse=true"
@@ -409,7 +424,7 @@ class QuickBooksClient:
         max_results: int = 1000,
     ) -> list[dict[str, Any]]:
         from urllib.parse import quote as _q
-        sql = f"SELECT * FROM Invoice STARTPOSITION {start_position} MAXRESULTS {max_results} ORDERBY MetaData.LastUpdatedTime DESC"
+        sql = f"SELECT * FROM Invoice ORDERBY MetaData.LastUpdatedTime DESC STARTPOSITION {start_position} MAXRESULTS {max_results}"
         url = f"{self.base_url()}/v3/company/{realm_id}/query?query={_q(sql)}&minorversion={self._minor()}"
         with httpx.Client(timeout=60.0) as client:
             res = client.get(url, headers=_headers(access_token))
@@ -421,6 +436,28 @@ class QuickBooksClient:
                 )
             qr = res.json().get("QueryResponse", {})
             return qr.get("Invoice", [])
+
+    def delete_invoice(
+        self,
+        access_token: str,
+        realm_id: str,
+        invoice_id: str,
+        sync_token: str,
+    ) -> dict[str, Any]:
+        """QBO doesn't support Customer/Item hard-delete (only deactivation
+        via a sparse Active:false update — see update_customer/update_item),
+        but Invoice does: operation=delete actually removes it."""
+        url = f"{self.base_url()}/v3/company/{realm_id}/invoice?operation=delete&minorversion={self._minor()}"
+        body = {"Id": invoice_id, "SyncToken": sync_token}
+        with httpx.Client(timeout=60.0) as client:
+            res = client.post(url, headers=_headers(access_token), json=body)
+            if not res.is_success:
+                raise httpx.HTTPStatusError(
+                    f"{res.status_code} from QBO delete_invoice({invoice_id}): {res.text}",
+                    request=res.request,
+                    response=res,
+                )
+            return res.json().get("Invoice", {})
 
 
 def phone_block(number: str | None) -> dict[str, str] | None:

@@ -115,6 +115,7 @@ class Customer(Base):
         "CustomerProductAndService",
         back_populates="customer",
         cascade="all, delete-orphan",
+        order_by="(CustomerProductAndService.position, CustomerProductAndService.id)",
     )
 
     centers: Mapped[list["Center"]] = relationship(

@@ -451,6 +451,15 @@ class _LineItem:
     rate: Decimal
     amount: Decimal
     qbo_payload: dict[str, Any]
+    # The source row's CustomerProductAndService.position — invoice line order.
+    position: int = 0
+
+
+def _order_lines(items: list["_LineItem"]) -> list["_LineItem"]:
+    """Invoice line order = the customer's service-row order (drag & drop on
+    the edit page), product by product across all centres on the invoice.
+    Stable, so lines of the same row keep their centre / slab-tier order."""
+    return sorted(items, key=lambda li: li.position)
 
 
 @dataclass
@@ -541,6 +550,7 @@ def _make_line_item(
         rate=rate,
         amount=amount,
         qbo_payload=qbo_payload,
+        position=cs.position or 0,
     )
 
 
@@ -741,6 +751,7 @@ def _build_qbo_invoice_payload(
 
     if not all_line_items:
         return None
+    all_line_items = _order_lines(all_line_items)
 
     total = sum(li.amount for li in all_line_items)
 
@@ -1240,20 +1251,10 @@ def build_line_item_preview(body: "RevalidateRequest", db: Session) -> dict:
         )
 
         for _group_key, group_names_lower in group_map.items():
-            line_items: list[dict] = []
+            group_items: list[_LineItem] = []
 
             def _add_preview_lines(items: list[_LineItem]) -> None:
-                for li in items:
-                    tax_amount = (li.amount * Decimal("0.1")).quantize(Decimal("0.0001"))
-                    line_items.append({
-                        "product_name": li.product_name,
-                        "description": li.description,
-                        "quantity": float(li.quantity),
-                        "rate": float(li.rate),
-                        "amount": float(li.amount),
-                        "tax_amount": float(tax_amount),
-                        "tax_code": "GST",
-                    })
+                group_items.extend(items)
 
             for name_lower in group_names_lower:
                 center_metrics = parsed.rows.get(name_lower, {})
@@ -1275,6 +1276,18 @@ def build_line_item_preview(body: "RevalidateRequest", db: Session) -> dict:
                     )
                 )
 
+            line_items = [
+                {
+                    "product_name": li.product_name,
+                    "description": li.description,
+                    "quantity": float(li.quantity),
+                    "rate": float(li.rate),
+                    "amount": float(li.amount),
+                    "tax_amount": float((li.amount * Decimal("0.1")).quantize(Decimal("0.0001"))),
+                    "tax_code": "GST",
+                }
+                for li in _order_lines(group_items)
+            ]
             if line_items:
                 fixed_pending = False
                 inv_offset += 1

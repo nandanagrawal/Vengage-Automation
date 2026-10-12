@@ -286,6 +286,21 @@ export function useCustomerForm(mode: "create" | "edit", customer: CustomerRow |
     setServiceError(null);
   };
 
+  // Drag & drop: the dragged row takes the target's slot — landing below it when
+  // dragged down, above it when dragged up. Row order = invoice line order.
+  const moveServiceRow = (fromKey: string, toKey: string) => {
+    if (fromKey === toKey) return;
+    setServiceRows((rows) => {
+      const from = rows.findIndex((r) => r.key === fromKey);
+      const to = rows.findIndex((r) => r.key === toKey);
+      if (from < 0 || to < 0) return rows;
+      const next = [...rows];
+      const [moved] = next.splice(from, 1);
+      next.splice(to, 0, moved);
+      return next;
+    });
+  };
+
   const removeServiceRow = (key: string) => {
     setServiceRows((rows) => rows.filter((r) => r.key !== key));
   };
@@ -543,7 +558,7 @@ export function useCustomerForm(mode: "create" | "edit", customer: CustomerRow |
     openExtra, setOpenExtra, openCenters, setOpenCenters,
     centerLines, setCenterLines, removeCenterLine, centersLoadError,
     serviceRows, setServiceRows, productOptions, sheetColumnOptions, serviceError,
-    updateServiceRow, removeServiceRow, addSlabLine, updateSlabLine, removeSlabLine,
+    updateServiceRow, removeServiceRow, moveServiceRow, addSlabLine, updateSlabLine, removeSlabLine,
     usedProductColumnPairs,
     customerTypeOptions, setCustomerTypeOptions,
     selectedCustomerTypeIds, setSelectedCustomerTypeIds,
@@ -563,7 +578,7 @@ export function CustomerFormFields({ api, mode }: { api: CustomerFormApi; mode: 
     openExtra, setOpenExtra, openCenters, setOpenCenters,
     centerLines, setCenterLines, removeCenterLine, centersLoadError,
     serviceRows, productOptions, sheetColumnOptions, serviceError,
-    updateServiceRow, removeServiceRow, addSlabLine, updateSlabLine, removeSlabLine,
+    updateServiceRow, removeServiceRow, moveServiceRow, addSlabLine, updateSlabLine, removeSlabLine,
     usedProductColumnPairs,
     customerTypeOptions, setCustomerTypeOptions,
     selectedCustomerTypeIds, setSelectedCustomerTypeIds,
@@ -571,6 +586,8 @@ export function CustomerFormFields({ api, mode }: { api: CustomerFormApi; mode: 
   } = api;
 
   const activeProducts = productOptions.filter((p) => p.active);
+  const [dragKey, setDragKey] = useState<string | null>(null);
+  const [dragOverKey, setDragOverKey] = useState<string | null>(null);
 
   const createType = async () => {
     const name = newTypeName.trim();
@@ -825,22 +842,65 @@ export function CustomerFormFields({ api, mode }: { api: CustomerFormApi; mode: 
             the sheet: enter its quantity and rate, and it&apos;s added to the customer&apos;s invoice every run.
             Input is like Fixed but with no set quantity — it&apos;s typed in fresh each time invoices are generated.
             {form.category === "partner" && " Since this is a Partner customer, pick the centre each service belongs to."}
+            {" "}Drag rows by the ⠿ handle to reorder them — invoice lines appear in this order.
           </p>
 
           {serviceRows.length > 0 && (
             <div className="rounded-lg border border-gray-200 bg-gray-50 overflow-hidden mb-2 divide-y divide-gray-100">
-              {serviceRows.map((row) => {
+              {serviceRows.map((row, rowIndex) => {
                 const pairKey = `${row.product_and_service_id}:${row.sheet_column_id}:${row.center_id}`;
                 const isPartner = form.category === "partner";
                 return (
-                  <div key={row.key} className="px-3 py-2.5">
+                  <div
+                    key={row.key}
+                    data-service-row
+                    className={`px-3 py-2.5 transition-colors ${dragKey === row.key ? "opacity-40" : ""} ${
+                      dragOverKey === row.key && dragKey !== row.key
+                        ? `bg-indigo-50/40 ${
+                            serviceRows.findIndex((r) => r.key === dragKey) < rowIndex
+                              ? "border-b-2 !border-b-indigo-400"
+                              : "border-t-2 !border-t-indigo-400"
+                          }`
+                        : ""
+                    }`}
+                    onDragOver={(e) => {
+                      if (!dragKey) return;
+                      e.preventDefault();
+                      e.dataTransfer.dropEffect = "move";
+                      if (dragOverKey !== row.key) setDragOverKey(row.key);
+                    }}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      if (dragKey) moveServiceRow(dragKey, row.key);
+                      setDragKey(null);
+                      setDragOverKey(null);
+                    }}
+                  >
                     <div
                       className={`grid gap-2 items-center ${
                         isPartner
-                          ? "grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)_5.5rem_minmax(0,1.3fr)_minmax(0,1.1fr)_1.5rem]"
-                          : "grid-cols-[minmax(0,1.6fr)_5.5rem_minmax(0,1.3fr)_minmax(0,1.1fr)_1.5rem]"
+                          ? "grid-cols-[1rem_minmax(0,1fr)_minmax(0,1.4fr)_5.5rem_minmax(0,1.3fr)_minmax(0,1.1fr)_1.5rem]"
+                          : "grid-cols-[1rem_minmax(0,1.6fr)_5.5rem_minmax(0,1.3fr)_minmax(0,1.1fr)_1.5rem]"
                       }`}
                     >
+                      {/* Drag handle — row order is the invoice line order */}
+                      <span
+                        draggable
+                        onDragStart={(e) => {
+                          setDragKey(row.key);
+                          e.dataTransfer.effectAllowed = "move";
+                          e.dataTransfer.setData("text/plain", row.key);
+                          const rowEl = (e.currentTarget as HTMLElement).closest("[data-service-row]");
+                          if (rowEl) e.dataTransfer.setDragImage(rowEl, 12, 12);
+                        }}
+                        onDragEnd={() => { setDragKey(null); setDragOverKey(null); }}
+                        className="cursor-grab active:cursor-grabbing select-none text-gray-300 hover:text-gray-500 text-sm leading-none text-center"
+                        title="Drag to reorder — invoice lines follow this order"
+                        aria-label="Drag to reorder"
+                      >
+                        ⠿
+                      </span>
+
                       {/* Centre dropdown — Partner customers only, this customer's own centres */}
                       {isPartner && (
                         <select

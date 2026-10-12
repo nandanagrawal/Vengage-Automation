@@ -72,6 +72,8 @@ class CustomerProductAndService(Base):
     # every QBO line-item description this row produces (and in the sheet
     # preview) — see _standard_desc/_slab_desc in invoice_generation.py.
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Order within this customer (drag & drop on the edit page); invoice lines follow it.
+    position: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

@@ -96,9 +96,10 @@ def _apply_customer_service_links(
     # before we insert the replacement rows (avoids UniqueViolation on flush).
     row.customer_services.clear()
     db.flush()
-    for svc in services:
+    for position, svc in enumerate(services):
         pricing_type = PricingType(svc.pricing_type)
         cps = CustomerProductAndService(
+            position=position,
             customer_id=row.id,
             product_and_service_id=svc.product_and_service_id,
             sheet_column_id=svc.sheet_column_id,

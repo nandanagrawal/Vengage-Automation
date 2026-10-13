@@ -21,7 +21,11 @@ class GeneratedInvoice(Base):
     customer_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("customers.id", ondelete="SET NULL"), nullable=True, index=True
     )
-    quickbooks_invoice_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Unique: the upload flow and the "invoice created" webhook both write this
+    # row, often within seconds of each other — they must land on one record.
+    quickbooks_invoice_id: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, unique=True
+    )
     invoice_number: Mapped[str | None] = mapped_column(String(64), nullable=True)
     center_group_name: Mapped[str] = mapped_column(String(500), nullable=False)
     total_amount: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False, default=0)

@@ -7,6 +7,7 @@ from decimal import Decimal
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_qbo_client
@@ -59,12 +60,14 @@ def _upsert_invoice_from_qbo(db: Session, qbo: SupportsQuickBooks, qbo_invoice_i
     delivery_time_raw = ((inv.get("DeliveryInfo") or {}).get("DeliveryTime"))
     sent_at: datetime | None = _parse_qbo_datetime(delivery_time_raw) if is_sent else None
 
-    existing = (
-        db.query(GeneratedInvoice)
-        .filter(GeneratedInvoice.quickbooks_invoice_id == qbo_invoice_id)
-        .first()
-    )
-    if existing:
+    def _find() -> GeneratedInvoice | None:
+        return (
+            db.query(GeneratedInvoice)
+            .filter(GeneratedInvoice.quickbooks_invoice_id == qbo_invoice_id)
+            .first()
+        )
+
+    def _update(existing: GeneratedInvoice) -> None:
         existing.invoice_number = inv.get("DocNumber")
         existing.send_status = send_status
         # Only stamp sent_at the first time the invoice transitions to sent
@@ -73,22 +76,33 @@ def _upsert_invoice_from_qbo(db: Session, qbo: SupportsQuickBooks, qbo_invoice_i
         if existing.customer_id is None:
             existing.customer_id = customer_id
         db.add(existing)
-    else:
-        customer_name = (inv.get("CustomerRef") or {}).get("name", "")
-        new_inv = GeneratedInvoice(
-            invoice_upload_id=None,
-            source="quickbooks",
-            customer_id=customer_id,
-            quickbooks_invoice_id=qbo_invoice_id,
-            invoice_number=inv.get("DocNumber"),
-            center_group_name=customer_name or "QBO",
-            total_amount=Decimal(str(inv.get("TotalAmt", 0))),
-            send_status=send_status,
-            sent_at=sent_at,
-        )
-        db.add(new_inv)
+        db.commit()
 
-    db.commit()
+    existing = _find()
+    if existing:
+        _update(existing)
+        return
+
+    customer_name = (inv.get("CustomerRef") or {}).get("name", "")
+    db.add(GeneratedInvoice(
+        invoice_upload_id=None,
+        source="quickbooks",
+        customer_id=customer_id,
+        quickbooks_invoice_id=qbo_invoice_id,
+        invoice_number=inv.get("DocNumber"),
+        center_group_name=customer_name or "QBO",
+        total_amount=Decimal(str(inv.get("TotalAmt", 0))),
+        send_status=send_status,
+        sent_at=sent_at,
+    ))
+    try:
+        db.commit()
+    except IntegrityError:
+        # The upload flow saved its row for this invoice first — update that one.
+        db.rollback()
+        existing = _find()
+        if existing:
+            _update(existing)
 
 
 def _mark_invoice_deleted(db: Session, qbo_invoice_id: str) -> None:

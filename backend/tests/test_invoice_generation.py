@@ -1816,3 +1816,84 @@ def test_customer_services_saved_in_request_order(admin_client, db_session):
 
     r = admin_client.patch(f"/api/v1/customers/{customer.id}", json={"customer_services": [svc(p1.id), svc(p2.id)]})
     assert [s["product_and_service_id"] for s in r.json()["customer_services"]] == [p1.id, p2.id]
+
+
+def _make_upload(db):
+    from app.models.invoice_upload import InvoiceUpload
+    up = InvoiceUpload(file_name="f.csv", status="processing")
+    db.add(up)
+    db.commit()
+    db.refresh(up)
+    return up
+
+
+def test_webhook_row_inserted_first_is_taken_over_not_duplicated(db_session):
+    """QBO's "invoice created" webhook can save its row before the upload flow
+    does. The upload must take that row over — one record per QBO invoice."""
+    from app.db.session import SessionLocal
+    from app.models.generated_invoice import GeneratedInvoice
+
+    class RacingQBO(FakeQBO):
+        def create_invoice(self, access_token, realm_id, payload):
+            obj = super().create_invoice(access_token, realm_id, payload)
+            other = SessionLocal()  # the webhook's own request/session
+            other.add(GeneratedInvoice(
+                source="quickbooks", quickbooks_invoice_id=obj["Id"], invoice_number=obj["DocNumber"],
+                center_group_name="Race Co", total_amount=Decimal("0"), send_status="sent",
+            ))
+            other.commit()
+            other.close()
+            return obj
+
+    sc = _make_service_code(db_session, "SC-RACE")
+    customer = _make_customer(db_session, "Race Co", qbo_id="qbo-race", email="r@r.com")
+    _make_center(db_session, customer.id, "race-a")
+    ps = _make_product(db_session, "Gardening", "qbo-race-g")
+    _link_service(db_session, customer, ps, sc, 2.0)
+    upload = _make_upload(db_session)
+
+    qbo = RacingQBO()
+    csv_bytes = _make_raw_csv([("race-a", {"Gardening": 5})], ["Gardening"])
+    result = generate_invoices(db_session, qbo, "tok", "realm", "f.csv", csv_bytes, invoice_upload_id=upload.id)
+
+    assert result.invoices_created == 1, result.errors
+    rows = db_session.query(GeneratedInvoice).filter(
+        GeneratedInvoice.quickbooks_invoice_id == qbo.invoices[0]["Id"]
+    ).all()
+    assert len(rows) == 1
+    row = rows[0]
+    assert row.invoice_upload_id == upload.id
+    assert row.source == "platform"
+    assert row.center_group_name != "Race Co"  # the upload's group label, not the webhook's
+    assert row.send_status == "sent"  # status the webhook was tracking is kept
+    assert len(row.line_items) == 1
+
+
+def test_webhook_after_upload_updates_existing_row(client, db_session, fake_qbo, monkeypatch):
+    """A webhook arriving after the upload saved its row updates it in place."""
+    from types import SimpleNamespace
+    from app.api.v1.endpoints import webhooks
+    from app.models.generated_invoice import GeneratedInvoice
+    from tests.conftest import webhook_post
+
+    monkeypatch.setattr(webhooks, "get_valid_tokens_sync", lambda: SimpleNamespace(access_token="t", realm_id="r"))
+
+    db_session.add(GeneratedInvoice(
+        source="platform", quickbooks_invoice_id="777", invoice_number="INV-777",
+        center_group_name="Upload Co (standalone)", total_amount=Decimal("10"), send_status="pending",
+    ))
+    db_session.commit()
+    fake_qbo.get_invoice = lambda *a: {
+        "Id": "777", "DocNumber": "INV-777", "EmailStatus": "EmailSent",
+        "CustomerRef": {"value": "x", "name": "Upload Co"}, "TotalAmt": 10,
+    }
+
+    r = webhook_post(client, {"eventNotifications": [{"dataChangeEvent": {"entities": [
+        {"name": "Invoice", "operation": "Emailed", "id": "777"}]}}]})
+    assert r.status_code == 200, r.text
+
+    db_session.expire_all()
+    rows = db_session.query(GeneratedInvoice).filter(GeneratedInvoice.quickbooks_invoice_id == "777").all()
+    assert len(rows) == 1
+    assert rows[0].send_status == "sent"
+    assert rows[0].center_group_name == "Upload Co (standalone)"

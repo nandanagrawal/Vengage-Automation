@@ -66,6 +66,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from sqlalchemy import func as sa_func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.config import settings
@@ -1025,6 +1026,36 @@ def _attach_center_files(
                 )
 
 
+def _claim_generated_invoice(db: Session, qbo_invoice_id: str, **fields: Any) -> GeneratedInvoice:
+    """The app's record for a QBO invoice we just created. If the "invoice
+    created" webhook already inserted one, take that row over (keeping the
+    send status it has been tracking) instead of adding a duplicate."""
+    existing = (
+        db.query(GeneratedInvoice)
+        .filter(GeneratedInvoice.quickbooks_invoice_id == qbo_invoice_id)
+        .first()
+    )
+    if existing is None:
+        row = GeneratedInvoice(quickbooks_invoice_id=qbo_invoice_id, send_status="pending", **fields)
+        db.add(row)
+        try:
+            db.flush()
+            return row
+        except IntegrityError:
+            # The webhook committed its row between our check and our insert.
+            db.rollback()
+            existing = (
+                db.query(GeneratedInvoice)
+                .filter(GeneratedInvoice.quickbooks_invoice_id == qbo_invoice_id)
+                .one()
+            )
+    for key, value in fields.items():
+        setattr(existing, key, value)
+    existing.source = "platform"
+    db.flush()
+    return existing
+
+
 def _create_and_send(
     db: Session,
     qbo: SupportsQuickBooks,
@@ -1072,27 +1103,18 @@ def _create_and_send(
         inv_id = str(qbo_inv.get("Id", ""))
         inv_number: str | None = qbo_inv.get("DocNumber") or None
 
-        if drive_files is not None and inv_id and customer.add_attachment_in_mail:
-            _attach_center_files(
-                qbo=qbo, access_token=access_token, realm_id=realm_id,
-                inv_id=inv_id, customer_name=customer.display_name,
-                center_names=center_names, center_by_name=center_by_name,
-                drive_files=drive_files, result=result,
-            )
-
+        # Saved before the (slow) Drive attachments so QBO's "invoice created"
+        # webhook finds this row instead of inserting a duplicate of its own.
         gen_inv_id: int | None = None
         if invoice_upload_id is not None and inv_id:
-            gen_inv = GeneratedInvoice(
+            gen_inv = _claim_generated_invoice(
+                db, inv_id,
                 invoice_upload_id=invoice_upload_id,
                 customer_id=customer.id,
                 center_group_name=label,
                 total_amount=total_amount,
-                send_status="pending",
-                quickbooks_invoice_id=inv_id,
                 invoice_number=inv_number,
             )
-            db.add(gen_inv)
-            db.flush()
 
             for name in center_names:
                 ctr = center_by_name.get(name.lower())
@@ -1115,6 +1137,14 @@ def _create_and_send(
 
             db.commit()
             gen_inv_id = gen_inv.id
+
+        if drive_files is not None and inv_id and customer.add_attachment_in_mail:
+            _attach_center_files(
+                qbo=qbo, access_token=access_token, realm_id=realm_id,
+                inv_id=inv_id, customer_name=customer.display_name,
+                center_names=center_names, center_by_name=center_by_name,
+                drive_files=drive_files, result=result,
+            )
 
         result.invoices_created += 1
         result.invoice_details.append(

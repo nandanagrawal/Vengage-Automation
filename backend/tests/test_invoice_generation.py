@@ -599,6 +599,23 @@ def test_amount_calculation(db_session):
     assert qbo.invoices[0]["Line"][0]["Amount"] == pytest.approx(10.50)
 
 
+def test_amount_rounds_half_cent_up_like_qbo(db_session):
+    """339 x 0.025 = 8.475 exactly; QBO expects 8.48. A float product
+    (8.4749999…) rounded to 8.47 and QBO rejected it with error 6070."""
+    sc = _make_service_code(db_session, "SC-H")
+    customer = _make_customer(db_session, "Half Co", qbo_id="qbo-half", email="h@h.com")
+    _make_center(db_session, customer.id, "mcmi")
+    ps = _make_product(db_session, "Call Forwards", "qbo-cf")
+    _link_service(db_session, customer, ps, sc, 0.025)
+
+    qbo = FakeQBO()
+    csv_bytes = _make_raw_csv([("mcmi", {"Call Forwards": 339})], ["Call Forwards"])
+    result = generate_invoices(db_session, qbo, "tok", "realm", "f.csv", csv_bytes)
+
+    assert result.invoices_created == 1
+    assert qbo.invoices[0]["Line"][0]["Amount"] == 8.48
+
+
 def test_invoice_description_format(db_session):
     """Line item description: "{Center Name} for {Mon} {YY}", e.g. "PAR for Aug 26".
 

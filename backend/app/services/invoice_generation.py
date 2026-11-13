@@ -62,7 +62,7 @@ import io
 import re
 from dataclasses import dataclass, field
 from datetime import date, timedelta
-from decimal import Decimal, InvalidOperation
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any
 
 from sqlalchemy import func as sa_func
@@ -524,12 +524,15 @@ def _make_line_item(
 ) -> _LineItem:
     """One QBO SalesItemLine + its in-app mirror, for a customer-service row."""
     ps = cs.product_and_service
-    amount = (qty * rate).quantize(Decimal("0.01"))
+    # QBO validates Amount == round_half_up(UnitPrice * Qty, 2) on the exact
+    # decimal product. Rounding a float product instead breaks on half-cent
+    # results: 339 * 0.025 is 8.4749999… as a float → 8.47, QBO wants 8.48.
+    amount = (Decimal(str(qty)) * Decimal(str(rate))).quantize(
+        Decimal("0.01"), rounding=ROUND_HALF_UP
+    )
     qty_f = float(qty)
     rate_f = float(rate)
-    # QBO validates Amount == UnitPrice * Qty using its own float arithmetic.
-    # Derive Amount from the same float values we send so rounding matches.
-    qbo_amount = round(qty_f * rate_f, 2)
+    qbo_amount = float(amount)
     qbo_payload: dict[str, Any] = {
         "DetailType": "SalesItemLineDetail",
         "Description": description,

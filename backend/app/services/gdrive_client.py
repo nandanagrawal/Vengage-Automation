@@ -33,6 +33,9 @@ _BARE_ID_RE = re.compile(r"^[a-zA-Z0-9_-]{10,}$")
 
 _SPREADSHEET_EXT_RE = re.compile(r"\.(xlsx|xls)$", re.IGNORECASE)
 
+# Attempts on transient Drive errors (5xx / 429), exponential backoff built into googleapiclient.
+_DRIVE_RETRIES = 5
+
 
 def ensure_drive_credentials() -> None:
     if not settings.GOOGLE_SERVICE_ACCOUNT_KEY_PATH:
@@ -89,7 +92,7 @@ def list_folder_files(folder_id: str) -> list[dict]:
                 includeItemsFromAllDrives=True,
                 corpora="allDrives",
             )
-            .execute()
+            .execute(num_retries=_DRIVE_RETRIES)
         )
         for f in resp.get("files", []):
             name = f.get("name", "")
@@ -144,5 +147,7 @@ def download_file(file_id: str, mime_type: str) -> tuple[bytes, str]:
     downloader = MediaIoBaseDownload(buf, request)
     done = False
     while not done:
-        _, done = downloader.next_chunk()
+        # Retries 5xx / 429 with exponential backoff — Drive returns transient
+        # 503 "Service Unavailable" now and then, which used to drop the attachment.
+        _, done = downloader.next_chunk(num_retries=_DRIVE_RETRIES)
     return buf.getvalue(), content_type
